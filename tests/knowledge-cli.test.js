@@ -32,6 +32,31 @@ function run(args, cwd, env = {}) {
   });
 }
 
+test('CLI block reads preserve table context and notes without returning unrelated chapter text', t => {
+  const structure = require('../public/knowledge-structure');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blink-block-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const book = structuredClone(fixture().book), entry = book.manuals[0].entries[0];
+  const values = { kind: 'table-row', section: ['HTTP连接'], context: ['timeout 等待时间'], text: '范围 1～120 秒。', notes: [{ id: 'fn1', text: '仅在连接建立后生效。' }] };
+  entry.text = 'HTTP error code -17。' + values.text + '章节其它内容。';
+  entry.structure = structure.seal(entry.title, entry.text, [{ ...values, id: 'b-timeout', sourceAnchor: 'timeout-row', fingerprint: structure.fingerprint(values) }]);
+  const target = path.join(dir, 'knowledge.json'); fs.writeFileSync(target, JSON.stringify(book));
+  const ref = book.manuals[0].id + '#' + entry.anchor;
+  const result = run(['--kb', target, '--get', ref, '--block', 'b-timeout', '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.match(output.text, /timeout/); assert.match(output.text, /仅在连接建立后生效/); assert.doesNotMatch(output.text, /章节其它内容/);
+  assert.equal(output.block.sourceAnchor, 'timeout-row'); assert.equal(output.sourcePath, entry.sourcePath);
+  const full = run(['--kb', target, '--get', ref, '--json']);
+  assert.equal(JSON.parse(full.stdout).text, entry.text);
+  assert.notEqual(run(['--kb', target, '--get', ref, '--block', 'missing']).status, 0);
+  assert.notEqual(run(['--kb', target, '--block', 'b-timeout', 'timeout']).status, 0);
+  for (const args of [['--json', '-17'], ['--json', '--', '-17']]) {
+    const found = run(['--kb', target, ...args]); assert.equal(found.status, 0, found.stderr);
+    assert.equal(JSON.parse(found.stdout).count, 1);
+  }
+});
+
 test('blink-cli searches an exported ZIP and returns traceable JSON', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blink-cli-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

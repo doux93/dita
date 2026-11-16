@@ -98,6 +98,56 @@ test('compiled reader and provenance are detached and frozen independently of ca
   assert.throws(() => { result.book.manuals[0].entries.push({}); }, TypeError);
 });
 
+test('preview prepares one immutable rendering and export reuses it when vectors arrive', async t => {
+  const reader = require('../public/knowledge-reader'), zip = require('../public/knowledge-zip');
+  const render = t.mock.method(reader, 'renderPage'), archive = t.mock.method(zip, 'createZip');
+  const input = manual(), prepared = require('../public/knowledge-package').preparePackage({ title: 'KB', model: 'ML307G', sdkVersion: 'V1', manuals: [input] });
+  assert.equal(render.mock.callCount(), 1); assert.equal(archive.mock.callCount(), 0);
+  input.entries[0].text = 'later edit';
+  const records = require('../lib/knowledge-book').flatten(prepared.book), data = require('../public/knowledge-semantic');
+  const chunks = await data.chunksFor(records, text => text.length + 2), vector = Array(512).fill(0); vector[0] = 1;
+  const semantic = data.createIndex(chunks, chunks.map(() => vector));
+  const output = prepared.build(semantic);
+  assert.equal(output.html, prepared.html); assert.equal(output.book, prepared.book);
+  assert.equal(render.mock.callCount(), 1); assert.equal(archive.mock.callCount(), 1);
+  const files = unzipSync(new Uint8Array(await output.zip.arrayBuffer()));
+  assert.equal(JSON.parse(strFromU8(files['docs/knowledge.json'])).semantic.chunks.length, chunks.length);
+  assert.equal(output.book.manuals[0].entries[0].text, 'ssl_id');
+});
+
+test('a source below 40 MiB cannot publish a vector archive above the CLI input limit', async () => {
+  const structure = require('../public/knowledge-structure'), data = require('../public/knowledge-semantic');
+  const input = manual(), paragraph = 'The HTTP client sends a request and receives response data from the server. '.repeat(8);
+  input.entries = []; const bodies = [];
+  for (let chapter = 0; chapter < 60; chapter++) {
+    const title = 'HTTP chapter ' + chapter, anchor = input.id + '--sec-' + chapter;
+    const units = Array.from({ length: 200 }, (_, i) => {
+      const value = { kind: 'paragraph', section: [], context: [], text: paragraph, notes: [] };
+      return { ...value, id: 'b-' + i, sourceAnchor: anchor + '--b-' + i, fingerprint: structure.fingerprint(value) };
+    });
+    const text = title + ' ' + Array(200).fill(paragraph).join(' ');
+    input.entries.push({ title, anchor, text, structure: structure.seal(title, text, units) });
+    bodies.push('<h2 id="' + anchor + '">' + title + '</h2>' + units.map(unit => '<p id="' + unit.sourceAnchor + '">' + unit.text + '</p>').join(''));
+  }
+  input.body = bodies.join(''); input.html = '<html><body>' + input.body + '</body></html>';
+  input.toc = input.entries.map(({ title, anchor }) => ({ title, anchor }));
+  assert.ok(Buffer.byteLength(input.html + input.body + JSON.stringify(input.entries)) < 40 * 1024 * 1024);
+  const prepared = require('../public/knowledge-package').preparePackage({ title: 'KB', model: 'ML307G', sdkVersion: 'V1', manuals: [input] });
+  const records = require('../lib/knowledge-book').flatten(prepared.book);
+  const chunks = await data.chunksFor(records, text => Math.ceil(text.length / 5) + 2), vector = Array(512).fill(0); vector[0] = 1;
+  assert.equal(chunks.length, 12000);
+  assert.throws(() => prepared.build(data.createIndex(chunks, chunks.map(() => vector))), /ZIP超过 64 MiB.*拆分手册集合/);
+});
+
+test('offline runtime embeds the same domain profile and query constraints as Node', () => {
+  const runtime = require('node:vm').runInNewContext(require('../public/knowledge-search').runtimeSource());
+  const records = [{ manualId: 'http', title: 'AT+MHTTPDEL 删除HTTP实例', text: '删除实例。HTTP error code -17。' }];
+  const browserIndex = runtime.build(records), engine = createSearchEngine(), index = engine.build(records);
+  for (const query of ['释放HTTP实例', 'HTTP error code 99999', '-17', '０ｘＦＦＦＦ']) {
+    assert.equal(JSON.stringify(runtime.search(records, browserIndex, query)), JSON.stringify(engine.search(records, index, query)));
+  }
+});
+
 test('SDK retrieval supports aliases, prefix suggestions, definition priority, scoped filters and compiled-index fallback', () => {
   const engine = createSearchEngine(), records = [
     { manualId: 'oc', mode: 'OC', module: '文件系统', title: '文件系统示例', text: '调用 cm_fs_mkdir、cm_fs_open', symbols: ['cm_fs_mkdir', 'cm_fs_open'] },

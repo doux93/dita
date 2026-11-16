@@ -7,6 +7,8 @@ const { bookFromPath, flatten, mergeBooks } = require('../lib/knowledge-book');
 const semantic = require('../lib/knowledge-semantic');
 const semanticData = require('../public/knowledge-semantic');
 const { createSearchEngine } = require('../public/knowledge-search');
+const { queryConstraints } = require('../public/knowledge-retrieval').createSdkSearch();
+const { assertReadable } = require('../public/knowledge-limits');
 
 function defaultKnowledgePath() {
   const candidates = [
@@ -24,9 +26,10 @@ function defaultKnowledgePath() {
 
 function parseArgs(args) {
   const options = { query: [], json: false, limit: 10, merge: [] };
-  const values = new Set(['--kb', '--limit', '--manual', '--module', '--mode', '--get', '--search', '--build-index', '--chunking']);
+  const values = new Set(['--kb', '--limit', '--manual', '--module', '--mode', '--get', '--block', '--search', '--build-index', '--chunking']);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg === '--') { options.query.push(...args.slice(i + 1)); break; }
     if (arg === '--merge') {
       if (!args[i + 1] || args[i + 1].startsWith('--')) throw Error('--merge 缺少参数');
       options.merge.push(args[++i]);
@@ -39,7 +42,7 @@ function parseArgs(args) {
     else if (values.has(arg)) {
       if (i + 1 >= args.length || args[i + 1].startsWith('--')) throw new Error(arg + ' 缺少参数');
       options[arg.slice(2)] = args[++i];
-    } else if (arg.startsWith('-')) throw new Error('未知参数：' + arg);
+    } else if (arg.startsWith('-') && !queryConstraints(arg).numeric) throw new Error('未知参数：' + arg);
     else options.query.push(arg);
   }
   if (options.query.length > 1 && /^kb$/i.test(options.query[0])) options.query.shift();
@@ -48,6 +51,7 @@ function parseArgs(args) {
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 50) throw new Error('--limit 必须是 1～50 的整数');
   }
   if (options.rebuild && !options['build-index']) throw Error('--rebuild 仅用于 --build-index');
+  if (options.block && !options.get) throw Error('--block 仅用于 --get');
   if (options.chunking && (!options['build-index'] || !['structure', 'legacy'].includes(options.chunking))) throw Error('--chunking 仅用于 --build-index，可选 structure 或 legacy');
   if (options.search && !['auto', 'lexical', 'hybrid', 'semantic'].includes(options.search)) throw Error('--search 须为 auto、lexical、hybrid 或 semantic');
   if ([options.list, options.info, Boolean(options.get), Boolean(options['build-index'])].filter(Boolean).length > 1) throw new Error('管理命令不能同时使用');
@@ -96,6 +100,8 @@ async function main() {
       '  blink-cli --list [--json]',
       '  blink-cli --info [--json]',
       '  blink-cli --get "手册ID#章节锚点" [--json]',
+      '  blink-cli --get "手册ID#章节锚点" --block "结构块ID" [--json]',
+      '  blink-cli --json -- -17',
       '',
       '选项：',
       '  --kb <路径>       知识库 ZIP、解压目录、knowledge.json 或 index.html',
@@ -141,7 +147,9 @@ async function main() {
       for (const warning of warnings) process.stderr.write(warning + '\n');
       const output = { ...book, index: undefined, semantic: index,
         manuals: book.manuals.map(({ body: _body, toc: _toc, ...manual }) => manual) };
-      fs.writeFileSync(target, JSON.stringify(output), { flag: 'wx' });
+      const serialized = JSON.stringify(output);
+      assertReadable(Buffer.byteLength(serialized), '语义知识库 JSON');
+      fs.writeFileSync(target, serialized, { flag: 'wx' });
       if (options.json) outputJson({ schema: 1, path: target, model: book.model, profile: index.profile.id, chunks: index.chunks.length, ...stats, warnings, structuredChapters, fallbackChapters: records.length - structuredChapters });
       else process.stdout.write('已生成离线语义知识库：' + target + '\n向量：复用 ' + stats.reusedManuals + ' 份，重新生成 ' + stats.rebuiltManuals + ' 份 · ' + stats.totalChunks + ' 个片段\n');
       return;
@@ -185,6 +193,15 @@ async function main() {
       const result = { schema: 1, id: manual.id + '#' + entry.anchor, title: entry.title,
         manual: manual.title, module: manual.module || manual.title, text: entry.text,
         sourcePath: entry.sourcePath || '', fingerprint: entry.fingerprint || '', source: sourceFor(book, manual.id), knowledgeBase };
+      if (options.block) {
+        const structure = require('../public/knowledge-structure').validate(entry);
+        if (!structure) throw Error('本章没有结构块，请重新核对发布；仍可使用 --get 读取整章');
+        const unit = structure.units.find(item => item.id === options.block);
+        if (!unit) throw Error('找不到结构块 ID：' + options.block);
+        result.block = { id: unit.id, kind: unit.kind, sourceAnchor: unit.sourceAnchor, fingerprint: unit.fingerprint,
+          section: unit.section, context: unit.context, notes: unit.notes };
+        result.text = [...unit.section, ...unit.context, unit.text, ...unit.notes.map(note => '注脚：' + note.text)].filter(Boolean).join('\n');
+      }
       if (options.json) outputJson(result);
       else process.stdout.write(result.title + '\n手册：' + result.manual + '\n来源：' + (result.source.repository || '未知') +
         ' / ' + (result.source.commit || '无提交记录') + '\n\n' + result.text + '\n');
@@ -216,7 +233,8 @@ async function main() {
         score: hit.score, reason: hit.reason + (bodyMention ? ' · 正文提及 ' + entity : ''), matchedTerms: hit.matchedTerms,
         evidence: bodyMention ? 'body-mention' : 'chapter-match',
         sourcePath: record.sourcePath || '', fingerprint: record.fingerprint || '',
-        excerpt: hit.excerpt || engine.excerpt(record.text, query), semanticScore: hit.semanticScore, source };
+        excerpt: hit.excerpt || engine.excerpt(record.text, query), semanticScore: hit.semanticScore,
+        ...(hit.chunk ? { chunk: { ...hit.chunk, blockId: record.structure?.units.some(unit => unit.id === hit.chunk.unitId) ? hit.chunk.unitId : undefined } } : {}), source };
     });
     if (options.json) outputJson({ schema: 1, query, knowledgeBase,
       searchEngine: engineVersion, searchMode, warnings, count: results.length, results });
@@ -233,7 +251,8 @@ async function main() {
         process.stdout.write('    匹配：' + result.reason + ' · 相关度：' + result.score + '\n');
         process.stdout.write('    摘要：' + result.excerpt + '\n');
         process.stdout.write('    来源：' + (result.source.repository || '未知') + ' / ' + (result.source.commit || '无提交记录') + '\n');
-        process.stdout.write('    读取：blink-cli --kb ' + shellQuote(knowledgePath) + options.merge.map(name => ' --merge ' + shellQuote(path.resolve(name))).join('') + ' --get ' + shellQuote(result.id) + '\n\n');
+        process.stdout.write('    读取：blink-cli --kb ' + shellQuote(knowledgePath) + options.merge.map(name => ' --merge ' + shellQuote(path.resolve(name))).join('') + ' --get ' + shellQuote(result.id) +
+          (result.chunk?.blockId ? ' --block ' + shellQuote(result.chunk.blockId) : '') + '\n\n');
       });
     }
   } catch (error) {

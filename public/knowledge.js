@@ -214,7 +214,7 @@
     }
     function build() {
       const manuals = readyParts(); if (!manuals.length || manuals.some(part => !part)) throw Error('请先重新核对所有手册来源');
-      if (!compiled) compiled = root.DitaKnowledgePackage.buildPackage({ title: get('knowledgeTitle').value, model: chosenModel, sdkVersion: get('knowledgeSdk').value, manuals });
+      if (!compiled) compiled = root.DitaKnowledgePackage.preparePackage({ title: get('knowledgeTitle').value, model: chosenModel, sdkVersion: get('knowledgeSdk').value, manuals });
       return compiled;
     }
     function preview() {
@@ -225,11 +225,11 @@
       if (busy) return;
       const generation = ++operation, workspace = A.api.token;
       try {
-        error(''); let output = build();
+        error(''); const prepared = build(); let output;
         if (get('knowledgeSemantic').checked) {
-          const request = structuredClone({ title: output.book.title, model: chosenModel, sdkVersion: output.book.sdkVersion, manuals: readyParts() });
+          const request = { manuals: prepared.manuals, model: prepared.book.model };
           abort = new AbortController(); busy = true; generatingVectors = true; controls();
-          const result = await root.DitaKnowledgeIndex.generate({ api: A.api, manuals: request.manuals, model: chosenModel, force: get('knowledgeRebuild').checked,
+          const result = await root.DitaKnowledgeIndex.generate({ api: A.api, manuals: request.manuals, model: request.model, force: get('knowledgeRebuild').checked,
             signal: abort.signal, current: () => generation === operation && workspace === A.api.token,
             onProgress: progress => {
               const text = progress.manual + ' · ' + (progress.source ? progress.source === 'generated' ? '已重新生成' : '已复用向量' : progress.total ? '正在生成 ' + progress.done + '/' + progress.total + ' 个片段' : '正在检查可复用向量…');
@@ -237,10 +237,10 @@
               get('knowledgeVectorStatus').textContent = '向量：复用 ' + progress.reusedManuals + ' 份，重新生成 ' + progress.rebuiltManuals + ' 份';
             } });
           if (generation !== operation || workspace !== A.api.token) return;
-          output = root.DitaKnowledgePackage.buildPackage({ ...request, semantic: result.index });
+          output = prepared.build(result.index);
           get('knowledgeVectorStatus').textContent = '向量：复用 ' + result.stats.reusedManuals + ' 份，重新生成 ' + result.stats.rebuiltManuals + ' 份 · ' + result.stats.totalChunks + ' 个片段' + (result.warnings.length ? '。' + result.warnings.join(' ') : '');
           get('knowledgeRebuild').checked = false;
-        }
+        } else output = prepared.build();
         if (generation !== operation || workspace !== A.api.token) return;
         A.downloadText(output.zip, output.filename, 'application/zip');
         status('已发起下载：' + output.filename + (get('knowledgeSemantic').checked ? '；已附带 CLI 离线语义索引，网页提供章节阅读与关键词检索。' : '；解压后打开 docs/index.html。'));

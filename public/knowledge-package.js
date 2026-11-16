@@ -4,9 +4,10 @@
   const reader = typeof module !== 'undefined' ? require('./knowledge-reader') : root.DitaKnowledgeReader;
   const search = typeof module !== 'undefined' ? require('./knowledge-search') : root.DitaKnowledgeSearch;
   const zip = typeof module !== 'undefined' ? require('./knowledge-zip') : root.DitaKnowledgeZip;
+  const limits = typeof module !== 'undefined' ? require('./knowledge-limits') : root.DitaKnowledgeLimits;
   const semanticData = typeof module !== 'undefined' ? require('./knowledge-semantic') : root.DitaKnowledgeSemantic;
   /** @param {import('./knowledge-contracts').KnowledgeRequest} request */
-  function buildPackage({ title, model, sdkVersion, manuals, semantic, generatedAt = new Date().toISOString() }) {
+  function preparePackage({ title, model, sdkVersion, manuals, generatedAt = new Date().toISOString() }) {
     title = String(title || '').trim(); model = String(model || '').trim(); sdkVersion = String(sdkVersion || '').trim();
     if (!title || title.length > 160 || !sdkVersion || sdkVersion.length > 80 || !/^[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(model)) throw new Error('请填写标题、有效型号和 SDK 版本');
     if (!manuals?.length || manuals.length > 30) throw new Error('请加入 1～30 份手册');
@@ -16,16 +17,14 @@
       if (manual.staleMetadata?.length) throw new Error('检索属性已过期，请在集合中核对：' + manual.title);
       ids.add(manual.id); size += new TextEncoder().encode(manual.html + manual.body + JSON.stringify(manual.entries)).length;
     }
-    if (size > 40 * 1024 * 1024) throw new Error('本版知识库内容超过 40 MB，请减少手册后重试');
+    if (size > limits.SOURCE_BYTES) throw new Error('本版知识库内容超过 40 MB，请减少手册后重试');
     manuals = structuredClone(manuals);
     /** @template T @param {T} value @returns {T} */
     function freeze(value) {
       if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.values(value).forEach(freeze); Object.freeze(value); }
       return value;
     }
-    semantic = semantic ? structuredClone(semantic) : undefined;
     const manifest = { schema: 1, title, model, sdkVersion, generatedAt, renderer: 'offline-knowledge-v1', search: { schema: 2, engine: 'sdk-search-1.2.2' },
-      ...(semantic ? { semantic: { profile: semantic.profile, chunks: semantic.chunks.length } } : {}),
       manuals: manuals.map(manual => ({ id: manual.id, title: manual.title, version: manual.version, model, capturedAt: manual.capturedAt,
         mode: manual.mode || 'other', module: manual.module || manual.title, searchEntries: manual.entries.map(entry => ({ sourcePath: entry.sourcePath || '', fingerprint: entry.fingerprint || '', kind: entry.kind || 'guide', aliases: entry.aliases || [], definedSymbols: entry.definedSymbols || [] })),
         file: 'manuals/' + manual.id + '.html', chapters: manual.entries.length, source: manual.source, report: manual.report, htmlSha256: manual.htmlSha256 })) };
@@ -34,25 +33,32 @@
       version: manual.version, mode: manual.mode || 'other', module: manual.module || manual.title, body: manual.body, toc: manual.toc, entries: manual.entries,
       source: { repository: manual.source.repository, commit: manual.source.commit, dirty: manual.source.dirty } })) };
     const records = book.manuals.flatMap(manual => manual.entries.map(entry => ({ ...entry, manualId: manual.id, manualTitle: manual.title, mode: manual.mode, module: manual.module })));
-    if (semantic) semanticData.validate(records, semantic);
     book.index = search.createSearchEngine().build(records);
-    freeze(book); freeze(manifest);
+    freeze(book); freeze(manifest); freeze(manuals);
     const html = reader.renderPage(book);
-    // CLI data contains chapter text and provenance; its index is built at query time.
-    const cliBook = { schema: book.schema, title: book.title, model: book.model, sdkVersion: book.sdkVersion,
-      generatedAt: book.generatedAt, ...(semantic ? { semantic } : {}), manuals: book.manuals.map(manual => ({
-        id: manual.id, title: manual.title, version: manual.version, mode: manual.mode, module: manual.module,
-        entries: manual.entries, source: manual.source
-      })) };
-    const files = [{ name: 'docs/index.html', content: html }, { name: 'docs/manifest.json', content: JSON.stringify(manifest, null, 2) },
-      { name: 'docs/knowledge.json', content: JSON.stringify(cliBook) },
-      { name: 'docs/README.txt', content: '打开 index.html 即可离线阅读和搜索。CLI 可直接读取本包 ZIP 或解压目录。请整体移动 docs 文件夹。\n型号：' + model + '\nSDK：' + sdkVersion + '\n本包不自动更新。来源和版本见 manifest.json。\n' },
-      ...manuals.map(manual => ({ name: 'docs/manuals/' + manual.id + '.html', content: manual.html }))];
-    /** @param {string} value */
-    const safe = value => value.replace(/[^\p{L}\p{N}._-]/gu, '-');
-    return { html, manifest, book, zip: zip.createZip(files), filename: safe(model) + '-SDK-' + safe(sdkVersion) + '-knowledge-base.zip' };
+    /** @param {import('./knowledge-semantic').SemanticIndex} [semantic] */
+    function build(semantic) {
+      if (semantic) semanticData.validate(records, semantic);
+      const finalManifest = semantic ? freeze({ ...manifest, semantic: { profile: structuredClone(semantic.profile), chunks: semantic.chunks.length } }) : manifest;
+      // CLI data contains chapter text and provenance; its index is built at query time.
+      const cliBook = { schema: book.schema, title: book.title, model: book.model, sdkVersion: book.sdkVersion,
+        generatedAt: book.generatedAt, ...(semantic ? { semantic } : {}), manuals: book.manuals.map(manual => ({
+          id: manual.id, title: manual.title, version: manual.version, mode: manual.mode, module: manual.module,
+          entries: manual.entries, source: manual.source
+        })) };
+      const files = [{ name: 'docs/index.html', content: html }, { name: 'docs/manifest.json', content: JSON.stringify(finalManifest, null, 2) },
+        { name: 'docs/knowledge.json', content: JSON.stringify(cliBook) },
+        { name: 'docs/README.txt', content: '打开 index.html 即可离线阅读和搜索。CLI 可直接读取本包 ZIP 或解压目录。请整体移动 docs 文件夹。\n型号：' + model + '\nSDK：' + sdkVersion + '\n本包不自动更新。来源和版本见 manifest.json。\n' },
+        ...manuals.map(manual => ({ name: 'docs/manuals/' + manual.id + '.html', content: manual.html }))];
+      /** @param {string} value */
+      const safe = value => value.replace(/[^\p{L}\p{N}._-]/gu, '-');
+      return { html, manifest: finalManifest, book, zip: zip.createZip(files), filename: safe(model) + '-SDK-' + safe(sdkVersion) + '-knowledge-base.zip' };
+    }
+    return { html, book, manuals, build };
   }
-  const api = { buildPackage };
+  /** @param {import('./knowledge-contracts').KnowledgeRequest} request */
+  function buildPackage(request) { return preparePackage(request).build(request.semantic); }
+  const api = { preparePackage, buildPackage };
   if (typeof module !== 'undefined') module.exports = api; else root.DitaKnowledgePackage = api;
 })(typeof window === 'undefined' ? globalThis : window);
 
