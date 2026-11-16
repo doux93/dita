@@ -111,7 +111,8 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     const listener = download => downloads.push(download); page.on('download', listener);
     await page.route(endpoint, async route => { await hold; try { await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'error', message: 'LATE_VECTOR_ERROR' }) + '\n' }); } catch (cause) { if (!/closed|handled|cancel|abort/i.test(cause.message)) throw cause; } });
     const request = page.waitForRequest(request => request.url().endsWith('/api/knowledge/semantic'));
-    await page.click('#knowledgeDownload'); await request; await page.click('#knowledgeClose'); release();
+    await page.click('#knowledgeDownload'); await request; assert.equal(await page.locator('#knowledgeBatchCancel').innerText(), '取消向量生成');
+    await page.click('#knowledgeBatchCancel'); assert.match(await page.locator('#knowledgeStatus').innerText(), /手册来源仍可用于重新导出/); await page.click('#knowledgeClose'); release();
     await page.unroute(endpoint); await page.click('#knowledgeButton'); await page.locator('#knowledgeDownload:not([disabled])').waitFor();
     assert.equal(downloads.length, 0); assert.doesNotMatch(await page.locator('#knowledgeError').innerText(), /LATE_VECTOR_ERROR/);
     assert.equal(await page.locator('#knowledgeRebuild').isChecked(), true);

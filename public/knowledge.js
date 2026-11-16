@@ -2,7 +2,7 @@
 (function (root) {
   function createController(A) {
     const get = id => document.getElementById(id), parts = new Map(), recipes = new Map(), preferences = new Map(), sourceStates = new Map(), capture = root.DitaKnowledgeCapture.createCapture(A);
-    let busy = false, loading = false, filterFailed = false, operation = 0, abort, compiled = null, chosenModel = '', preferenceKey = '';
+    let busy = false, generatingVectors = false, loading = false, filterFailed = false, operation = 0, abort, compiled = null, chosenModel = '', preferenceKey = '';
     const batchCapture = root.DitaKnowledgeBatch.createBatchCapture(A);
     const workspaceKey = () => JSON.stringify([A.state.root, A.state.currentBranch || '']);
     const sourceKey = (root, path) => JSON.stringify([root, path]);
@@ -49,6 +49,7 @@
       for (const id of ['knowledgeTitle', 'knowledgeSdk', 'knowledgeVersion', 'knowledgeFilter', 'knowledgePrefixes', 'knowledgeMode', 'knowledgeModule', 'knowledgePlan', 'knowledgePlanSave', 'knowledgePlanLoad', 'knowledgePlanNew', 'knowledgePlanExport', 'knowledgePlanImport', 'knowledgeSourcesAdd', 'knowledgeBatchCheck', 'knowledgeBatchRetry']) get(id).disabled = busy;
       get('knowledgeAdd').disabled = busy || loading || filterFailed; get('knowledgeFilter').disabled = busy || loading;
       get('knowledgeBatchCheck').disabled = busy || loading || !recipes.size; get('knowledgeBatchRetry').disabled = busy || loading || ![...recipes.keys()].some(key => !parts.has(key)); get('knowledgeBatchCancel').hidden = !busy;
+      get('knowledgeBatchCancel').textContent = generatingVectors ? '取消向量生成' : '取消核对';
       get('knowledgeModel').disabled = busy || recipes.size > 0;
       const ready = recipes.size > 0 && readyParts().every(part => part && !part.staleMetadata.length);
       get('knowledgePreview').disabled = busy || !ready; get('knowledgeChunkPreview').disabled = busy || !ready; get('knowledgeDownload').disabled = busy || !ready; get('knowledgeClear').disabled = busy || !recipes.size;
@@ -143,7 +144,7 @@
       get('knowledgeModels').replaceChildren(...[...models].map(value => new Option(value, value)));
       get('knowledgeDialog').showModal(); renderCollection(); await refreshSources();
     }
-    function cancel() { remember(); abort?.abort(); operation++; for (const [key, value] of sourceStates) if (!parts.has(key) && value.state !== 'error') sourceStates.set(key, { state: 'pending', message: '已取消，需重新核对' }); busy = false; loading = false; controls(); }
+    function cancel() { remember(); abort?.abort(); operation++; for (const [key, value] of sourceStates) if (!parts.has(key) && value.state !== 'error') sourceStates.set(key, { state: 'pending', message: '已取消，需重新核对' }); busy = false; generatingVectors = false; loading = false; controls(); }
     async function add() {
       if (busy || loading || filterFailed) return;
       const model = get('knowledgeModel').value.trim(), version = get('knowledgeVersion').value.trim();
@@ -227,7 +228,7 @@
         error(''); let output = build();
         if (get('knowledgeSemantic').checked) {
           const request = structuredClone({ title: output.book.title, model: chosenModel, sdkVersion: output.book.sdkVersion, manuals: readyParts() });
-          abort = new AbortController(); busy = true; controls();
+          abort = new AbortController(); busy = true; generatingVectors = true; controls();
           const result = await root.DitaKnowledgeIndex.generate({ api: A.api, manuals: request.manuals, model: chosenModel, force: get('knowledgeRebuild').checked,
             signal: abort.signal, current: () => generation === operation && workspace === A.api.token,
             onProgress: progress => {
@@ -245,13 +246,13 @@
         status('已发起下载：' + output.filename + (get('knowledgeSemantic').checked ? '；已附带 CLI 离线语义索引，网页提供章节阅读与关键词检索。' : '；解压后打开 docs/index.html。'));
         A.setStatus('离线知识库已生成：' + output.filename);
       } catch (cause) { if (generation === operation) error(cause.message); }
-      finally { if (generation === operation) { busy = false; controls(); } }
+      finally { if (generation === operation) { busy = false; generatingVectors = false; controls(); } }
     }
     get('knowledgeSemantic').addEventListener('change', controls);
     get('knowledgeSourcesAdd').addEventListener('click', () => sources.show());
     get('knowledgeBatchCheck').addEventListener('click', () => batch());
     get('knowledgeBatchRetry').addEventListener('click', () => batch([...recipes.keys()].filter(key => !parts.has(key))));
-    get('knowledgeBatchCancel').addEventListener('click', () => { cancel(); renderCollection(); status('已取消核对，未完成来源需重新核对后发布。'); });
+    get('knowledgeBatchCancel').addEventListener('click', () => { const vectors = generatingVectors; cancel(); renderCollection(); if (vectors) get('knowledgeVectorStatus').textContent = '向量生成已取消，可重新导出。'; status(vectors ? '已取消向量生成，手册来源仍可用于重新导出。' : '已取消核对，未完成来源需重新核对后发布。'); });
     get('knowledgeButton').addEventListener('click', show); get('knowledgeAdd').addEventListener('click', add);
     get('knowledgeClose').addEventListener('click', () => { cancel(); get('knowledgeDialog').close(); }); get('knowledgeDialog').addEventListener('cancel', cancel);
     get('knowledgeChunkPreview').addEventListener('click', () => chunkPreview.show());
