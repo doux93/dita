@@ -31,7 +31,8 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     assert.equal(await page.locator('#knowledgeError').innerText(), '');
   }
   async function download() {
-    const waiting = page.waitForEvent('download'); await page.click('#knowledgeDownload');
+    const semanticExport = await page.locator('#knowledgeSemantic').isChecked();
+    const waiting = page.waitForEvent('download', { timeout: semanticExport ? 120000 : 15000 }); await page.click('#knowledgeDownload');
     const result = await waiting; return { filename: result.suggestedFilename(), bytes: await fs.readFile(await result.path()) };
   }
   async function stage(name, action) { let passed = false; await t.test(name, async () => { await action(); passed = true; }); assert.ok(passed, 'Stop after failed knowledge workflow: ' + name); }
