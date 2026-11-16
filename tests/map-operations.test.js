@@ -78,3 +78,15 @@ test('Map readers use exact relative paths and reject unsupported or escaping re
     assert.throws(() => resolveMapHref('main.ditamap', href));
   }
 });
+
+test('external scope is inherited without resolving links, while explicit local descendants retain source paths', () => {
+  const calls = [], reader = createMapReader((from, href) => { calls.push(href); return resolveMapHref(from, href); });
+  const xml = '<map><topicref scope="external" href="https://example.invalid/remote.ditamap#part">' +
+    '<topicref href="relative-external.dita"/><topicref scope="local" href="topics/local.dita"/>' +
+    '</topicref><topicref href="topics/next.dita"/></map>';
+  const map = reader.describe(parseXml(xml).root, 'main.ditamap');
+  assert.deepEqual(calls, ['topics/local.dita', 'topics/next.dita']);
+  assert.deepEqual(map.children.map(node => [node.path, node.sourcePath]), [['topics/local.dita', '0.1'], ['topics/next.dita', '1']]);
+  assert.deepEqual(reader.describe(parseXml('<map scope="external"><topicref href="/remote.dita"/></map>').root, 'main.ditamap').children, []);
+  assert.throws(() => reader.describe(parseXml('<map scope="external"><topicref scope="local" href="/bad.dita"/></map>').root, 'main.ditamap'), /相对路径/);
+});

@@ -64,6 +64,20 @@ test('saved and Git publication snapshots reject missing targets even when an ar
   const exact = await call('capture', recipe(root));
   assert.deepEqual(exact.snapshot.files.map(([name]) => name), ['topics/archive/a.dita']);
 });
+test('saved and Git knowledge captures omit external references and retain exact local inputs', async t => {
+  const { roots: [root], call, recipe, command } = await setup(t);
+  const content = '<map><title>Mixed</title><topicref scope="external" href="https://example.invalid/manual.ditamap#part">' +
+    '<topicref href="not-a-workspace-file.dita"/><topicref scope="local" href="topics/a.dita"/></topicref></map>';
+  await fs.writeFile(path.join(root, 'manual.ditamap'), content);
+  command(root, 'add', '.'); command(root, '-c', 'user.name=QA', '-c', 'user.email=qa@example.invalid', 'commit', '-qm', 'mixed reference scopes');
+  for (const revision of ['', 'HEAD']) {
+    const result = await call('capture', { ...recipe(root), revision });
+    assert.deepEqual(result.snapshot.files.map(([name]) => name), ['topics/a.dita']);
+    assert.equal(result.snapshot.map.children[0].sourcePath, '1.1');
+    assert.equal((await call('verify', result.receipt)).current, true);
+  }
+  assert.equal(await fs.readFile(path.join(root, 'manual.ditamap'), 'utf8'), content);
+});
 test('missing and malformed settings, symlinks and unregistered roots fail without arbitrary reads', async t => {
   const { base, roots: [root], call, access, recipe } = await setup(t);
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'dita-outside-')); t.after(() => fs.rm(outside, { recursive: true, force: true }));
