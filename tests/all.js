@@ -68,6 +68,7 @@ require('./template.test');
 require('./knowledge.test.js');
 require('./knowledge-cli.test.js');
 require('./knowledge-semantic.test.js');
+require('./knowledge-structure.test.js');
 
 require('./knowledge-plan.test');
 

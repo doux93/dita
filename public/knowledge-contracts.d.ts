@@ -1,8 +1,8 @@
 import type { DeliveryReport } from './data-contracts';
-export interface KnowledgeEntry { readonly anchor: string; readonly title: string; readonly text: string;
+export interface KnowledgeEntry { readonly structure?: import('./knowledge-structure').KnowledgeStructure; readonly anchor: string; readonly title: string; readonly text: string;
   readonly sourcePath?: string; readonly fingerprint?: string; readonly kind?: string; readonly aliases?: readonly string[];
   readonly symbols?: readonly string[]; readonly definedSymbols?: readonly string[] }
-export interface SearchRecord { readonly title: string; readonly text: string; readonly manualId: string; readonly manualTitle?: string;
+export interface SearchRecord { readonly structure?: import('./knowledge-structure').KnowledgeStructure; readonly sourcePath?:string; readonly title: string; readonly text: string; readonly manualId: string; readonly manualTitle?: string;
   readonly anchor?: string; readonly kind?: string; readonly mode?: string; readonly module?: string;
   readonly aliases?: readonly string[]; readonly symbols?: readonly string[]; readonly definedSymbols?: readonly string[] }
 export interface SearchIndex { readonly schema: 2; readonly compiled: object }

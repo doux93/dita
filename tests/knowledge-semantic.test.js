@@ -103,3 +103,16 @@ test('clear multi-term lexical evidence keeps priority over a merely similar cha
     assert.equal((await semantic.search(records, index, '把服务器文件下载到本地', lexical, { semanticOnly: true }))[0].position, 1);
   } finally { semantic.encoder.encode = original; }
 });
+
+
+test('secondary authentication questions require the requested capability rather than a generic WebUI mention', async () => {
+  const semantic = require('../lib/knowledge-semantic'), original = semantic.encoder.encode;
+  semantic.encoder.encode = async () => [vector(0)];
+  try {
+    const records = [{ ...row('WebUI 后端认证与页面开发。', 'generic'), manualTitle: 'WebUI开发' },
+      { ...row('WebUI 双因素认证配置步骤。', 'two-factor'), manualTitle: 'WebUI开发' }];
+    const chunks = await chunksFor(records, countTokens), index = createIndex(chunks, chunks.map(() => vector(0)));
+    const hits = await semantic.search(records, index, 'webui二次认证', []);
+    assert.deepEqual(hits.map(hit => hit.position), [1]);
+  } finally { semantic.encoder.encode = original; }
+});

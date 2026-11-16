@@ -30,8 +30,8 @@ async function main() {
   try {
     const bundle = path.join(stage, 'blink-cli'), app = path.join(bundle, 'runtime', 'app');
     await fs.mkdir(app, { recursive: true });
-    const files = ['bin/blink-cli.js', 'lib/knowledge-book.js', 'lib/knowledge-semantic.js', 'lib/semantic-encoder.js',
-      'public/knowledge-search.js', 'public/knowledge-retrieval.js', 'public/knowledge-semantic.js'];
+    const files = ['bin/blink-cli.js', 'lib/knowledge-book.js', 'lib/knowledge-semantic.js', 'lib/semantic-encoder.js', 'lib/knowledge-structure.js',
+      'public/knowledge-search.js', 'public/knowledge-retrieval.js', 'public/knowledge-semantic.js', 'public/knowledge-structure.js'];
     for (const name of files) { await fs.mkdir(path.dirname(path.join(app, name)), { recursive: true }); await fs.copyFile(path.join(root, name), path.join(app, name)); }
     await fs.cp(path.join(modelRoot, PROFILE.model), path.join(bundle, 'runtime', 'models', PROFILE.model), { recursive: true });
     await fs.cp(path.join(root, 'docs', 'licenses'), path.join(bundle, 'runtime', 'licenses'), { recursive: true });
@@ -40,7 +40,7 @@ async function main() {
       'https://raw.githubusercontent.com/microsoft/onnxruntime/v1.21.0/ThirdPartyNotices.txt', '--output', notices], { stdio: 'inherit' });
     if (createHash('sha256').update(await fs.readFile(notices)).digest('hex') !== '8c06e8cff286a4a117b3b246a4c7da68428a144af757823db50e3d6520941ec6') throw Error('运行库第三方许可文件校验失败');
     await fs.writeFile(path.join(app, 'package.json'), JSON.stringify({ name: 'blink-offline-search', version: '1.0.0', private: true,
-      type: 'commonjs', dependencies: { '@huggingface/transformers': '3.8.1', fflate: '0.8.3' } }, null, 2));
+      type: 'commonjs', dependencies: { '@huggingface/transformers': '3.8.1', fflate: '0.8.3', parse5: '7.3.0' } }, null, 2));
     // Install target-platform CPU dependencies at build time; end users unpack them.
     execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--omit=dev', '--ignore-scripts', '--os=win32', '--cpu=x64', '--no-audit', '--no-fund'], { cwd: app, stdio: 'inherit', shell: process.platform === 'win32' });
     const runtime = path.join(app, 'node_modules', 'onnxruntime-node', 'bin', 'napi-v3');

@@ -207,3 +207,22 @@ test('older semantic profiles remain readable and auto falls back without mixing
     assert.equal(updated.manuals[0].entries[0].text, book.manuals[0].entries[0].text);
   }
 });
+
+
+test('structural recovery from a legacy ZIP is bound to its published HTML and machine-readable text', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blink-structure-binding-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const book = structuredClone(fixture().book), manual = book.manuals[0], entry = manual.entries[0];
+  manual.body = '<h2 id="' + entry.anchor + '">' + entry.title + '</h2><p>超时参数说明。</p>';
+  entry.text = entry.title + '超时参数说明。';
+  const html = require('../public/knowledge-reader').renderPage(book);
+  const cli = structuredClone(book); delete cli.manuals[0].body;
+  const good = createZip([{ name: 'docs/index.html', content: html }, { name: 'docs/knowledge.json', content: JSON.stringify(cli) }]);
+  const target = path.join(dir, 'good.zip'); fs.writeFileSync(target, Buffer.from(await good.arrayBuffer()));
+  const loaded = require('../lib/knowledge-book').bookFromPath(target, { structured: true });
+  assert.ok(loaded.manuals[0].entries[0].structure.units.some(unit => unit.kind === 'paragraph'));
+  cli.manuals[0].entries[0].text += '不同版本';
+  const bad = createZip([{ name: 'docs/index.html', content: html }, { name: 'docs/knowledge.json', content: JSON.stringify(cli) }]);
+  const mismatch = path.join(dir, 'mismatch.zip'); fs.writeFileSync(mismatch, Buffer.from(await bad.arrayBuffer()));
+  assert.throws(() => require('../lib/knowledge-book').bookFromPath(mismatch, { structured: true }), /正文不一致/);
+  assert.equal(require('../lib/knowledge-book').bookFromPath(mismatch).manuals[0].entries[0].text, cli.manuals[0].entries[0].text);
+});

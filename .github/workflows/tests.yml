@@ -31,7 +31,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npx playwright-core install --with-deps chromium
       - run: sudo apt-get install -y poppler-utils
+      - run: npm run prepare:semantic
       - run: npm run test:browser
+        env:
+          BLINK_MODELS: ./models
   semantic-windows:
     runs-on: windows-latest
     steps:
@@ -42,7 +45,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run prepare:semantic
-      - run: node --test tests/knowledge-semantic.test.js tests/knowledge-cli.test.js
+      - run: node --test tests/knowledge-semantic.test.js tests/knowledge-structure.test.js tests/knowledge-cli.test.js
         env:
           BLINK_MODELS: ./models
       - run: node scripts/check-semantic.js dist/smoke.json
@@ -58,3 +61,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Portable CLI failed' }
           $result = $json | ConvertFrom-Json
           if ($result.results[0].title -ne '日志抓取方法') { throw 'Portable search returned an unexpected chapter' }
+          & .\blink-cli.cmd --kb .\docs\index.html --build-index .\verified-structure.json
+          if ($LASTEXITCODE -ne 0) { throw 'Portable structural index generation failed' }
+          $verified = Get-Content .\verified-structure.json -Raw | ConvertFrom-Json
+          if ($verified.semantic.profile.id -ne 'bge-small-zh-int8-cls-v3') { throw 'Unexpected chunking profile' }
+          if (!($verified.semantic.chunks | Where-Object { $_.kind -eq 'paragraph' })) { throw 'Published HTML structure was not recovered' }
