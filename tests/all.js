@@ -13,6 +13,8 @@ require('./api-integration.test.js');
 
 require('./xml-source.test.js');
 require('./map-source.test.js');
+require('./map-operations.test.js');
+require('./document-files.test.js');
 require('./map-author-controller.test.js');
 require('./footnotes.test.js');
 require('./publication.test.js');

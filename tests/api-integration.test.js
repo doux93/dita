@@ -84,6 +84,26 @@ test('HTTP workflow protects edits, Git baselines, repository boundaries and wor
     assert.equal(good.status, 200);
     assert.equal(await fs.readFile(file, 'utf8'), initial);
   });
+  await t.test('encoding failures leave existing bytes intact and cannot create a damaged document', async () => {
+    const disk = await fs.readFile(file, 'utf8');
+    const content = '<?xml version="1.0" encoding="ISO-8859-1"?><topic><title>中文</title></topic>';
+    for (const [method, body] of [
+      ['PUT', { path: 'topics/a.dita', content, expectedContent: disk }],
+      ['POST', { path: 'topics/a.dita', content, overwrite: true, expectedContent: disk }],
+      ['POST', { path: 'topics/unencodable.dita', content }]
+    ]) {
+      const response = await request('/api/file', method, body);
+      assert.equal(response.status, 400);
+      assert.match((await response.json()).error, /无损保存/);
+      assert.equal(await fs.readFile(file, 'utf8'), disk);
+    }
+    await assert.rejects(fs.stat(path.join(repo, 'topics/unencodable.dita')), { code: 'ENOENT' });
+    const safe = '<topic><title>中文</title><body><p>encoding="latin1"</p></body></topic>';
+    const saved = await request('/api/file', 'POST', { path: 'topics/encoding-text.dita', content: safe });
+    assert.equal(saved.status, 201); assert.equal((await saved.json()).content, safe);
+    assert.equal(await fs.readFile(path.join(repo, 'topics/encoding-text.dita'), 'utf8'), safe);
+    await fs.unlink(path.join(repo, 'topics/encoding-text.dita'));
+  });
   await t.test('symbolic links cannot read or overwrite documents outside the root', async () => {
     await fs.writeFile(path.join(temporary, 'outside.xml'), '<private/>');
     await fs.symlink(path.join(temporary, 'outside.xml'), path.join(repo, 'link.xml'));
@@ -96,6 +116,59 @@ test('HTTP workflow protects edits, Git baselines, repository boundaries and wor
     const map = await (await request('/api/map/resolve', 'POST', { path: 'main.ditamap', content: '<map><title>Unsaved title</title><topicref href="topics/a.dita"/></map>' })).json();
     assert.equal(map.title, 'Unsaved title');
     assert.match(await fs.readFile(path.join(repo, 'main.ditamap'), 'utf8'), /Guide/);
+  });
+  await t.test('Save As validates Map metadata before creating or replacing a file', async () => {
+    const target = 'copy.ditamap', original = Buffer.from("<map title='Keep original'><topicref href='topics/a.dita'/></map>\r\n");
+    const destination = path.join(repo, target), newFile = path.join(repo, 'invalid-copy.ditamap');
+    await fs.writeFile(destination, original);
+    try {
+      for (const href of ['/absolute.dita', '../outside.dita', 'topics/%invalid.dita']) {
+        const content = '<map><title>Rejected</title><topicref href="' + href + '"/></map>';
+        for (const body of [
+          { path: 'invalid-copy.ditamap', content },
+          { path: target, content, overwrite: true, expectedContent: original.toString('utf8') }
+        ]) {
+          const response = await request('/api/file', 'POST', body);
+          assert.equal(response.status, 400);
+          assert.deepEqual(await fs.readFile(destination), original);
+          await assert.rejects(fs.stat(newFile), { code: 'ENOENT' });
+        }
+      }
+      const content = '<map><title>Valid copy</title><topicref href="topics/a.dita"/></map>';
+      const response = await request('/api/file', 'POST', { path: target, content, overwrite: true, expectedContent: original.toString('utf8') });
+      assert.equal(response.status, 201);
+      const saved = await response.json();
+      assert.equal(saved.saved, true); assert.equal(saved.created, false); assert.equal(saved.content, content);
+      assert.equal(saved.map.title, 'Valid copy'); assert.equal(saved.map.children[0].path, 'topics/a.dita');
+      assert.equal(await fs.readFile(destination, 'utf8'), content);
+    } finally {
+      await fs.rm(destination, { force: true }); await fs.rm(newFile, { force: true });
+    }
+  });
+  await t.test('external Map references do not block local navigation or a successful Save As acknowledgement', async () => {
+    const content = '<map><title>Mixed</title><topicref scope="external" href="https://example.invalid/manual#part"/><topicref href="topics/a.dita"/></map>';
+    const resolved = await request('/api/map/resolve', 'POST', { path: 'main.ditamap', content });
+    assert.equal(resolved.status, 200);
+    const map = await resolved.json();
+    assert.deepEqual(map.children.map(node => [node.path, node.sourcePath]), [['topics/a.dita', '2']]);
+    const destination = path.join(repo, 'external-copy.ditamap');
+    try {
+      const response = await request('/api/file', 'POST', { path: 'external-copy.ditamap', sourcePath: 'main.ditamap', content });
+      assert.equal(response.status, 201);
+      const saved = await response.json();
+      assert.equal(saved.saved, true); assert.equal(saved.created, true); assert.equal(saved.content, content);
+      assert.deepEqual(saved.map.children, map.children);
+      assert.equal(await fs.readFile(destination, 'utf8'), content);
+    } finally { await fs.rm(destination, { force: true }); }
+  });
+  await t.test('missing Map targets never resolve to archived same-name Topics', async () => {
+    const archive = path.join(repo, 'topics/archive'); await fs.mkdir(archive);
+    await fs.writeFile(path.join(archive, 'missing.dita'), '<topic><title>Wrong version</title></topic>');
+    const response = await request('/api/map/resolve', 'POST', { path: 'main.ditamap', content: '<map><topicref href="topics/missing.dita"/></map>' });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).children[0].path, 'topics/missing.dita');
+    assert.equal((await request('/api/file?path=topics/missing.dita')).status, 404);
+    await fs.rm(archive, { recursive: true });
   });
   await t.test('clean switch rotates identity and rejects stale-tab writes', async () => {
     const switched = await request('/api/branch', 'POST', { branch: 'other' });

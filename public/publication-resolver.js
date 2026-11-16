@@ -48,10 +48,13 @@
   }
   function validateMap(source, model) {
     if (!source) return;
-    walk(xml.inspectSource(source), node => {
-      if (['mapref', 'ditavalref', 'keydef'].includes(node.name) || node.attrs.conref || node.attrs.conkeyref || node.attrs.keyref || node.attrs.keys || node.attrs.keyscope || /ditamap/i.test(decode(node.attrs.format)) || /\.ditamap(?:#|$)/i.test(decode(node.attrs.href))) throw new Error('Map 包含暂未支持的复用／键或子 Map，请先用完整 DITA 工具展开');
+    walk(xml.inspectSource(source), (node, ancestors) => {
+      const scope = decode([...ancestors, node].reverse().find(parent => parent.attrs.scope)?.attrs.scope);
+      const external = scope === 'external';
+      const localSubmap = !external && (/ditamap/i.test(decode(node.attrs.format)) || /\.ditamap(?:#|$)/i.test(decode(node.attrs.href)));
+      if (['mapref', 'ditavalref', 'keydef'].includes(node.name) || node.attrs.conref || node.attrs.conkeyref || node.attrs.keyref || node.attrs.keys || node.attrs.keyscope || localSubmap) throw new Error('Map 包含暂未支持的复用／键或子 Map，请先用完整 DITA 工具展开');
       if (model && (node.attrs.product || node.attrs.props || node.attrs.otherprops)) throw new Error('Map 级型号条件尚未展开，请先使用 Topic 内的注脚条件或完整 DITA 发布工具');
-      if (node.attrs.href && decode(node.attrs.href).includes('#')) throw new Error('暂不支持 Map 引用指定 Topic 片段，请使用单 Topic 文件');
+      if (!external && node.attrs.href && decode(node.attrs.href).includes('#')) throw new Error('暂不支持 Map 引用指定 Topic 片段，请使用单 Topic 文件');
     });
   }
   function resolveConrefsDetailed(files, profile) {
