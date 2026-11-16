@@ -28,7 +28,7 @@ function fixture() {
 
 function run(args, cwd, env = {}) {
   return spawnSync(process.execPath, [path.resolve(__dirname, '../bin/blink-cli.js'), ...args], {
-    cwd, encoding: 'utf8', env: { ...process.env, BLINK_KB: '', ...env }
+    cwd, encoding: 'utf8', env: { ...process.env, BLINK_KB: '', ...(process.env.BLINK_MODELS ? { BLINK_MODELS: path.resolve(process.env.BLINK_MODELS) } : {}), ...env }
   });
 }
 
