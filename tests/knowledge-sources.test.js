@@ -23,7 +23,7 @@ async function setup(t) {
     const req = { method: 'POST', headers: {}, async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)); } };
     assert.equal(await handle(req, res, '/api/knowledge/' + endpoint), true); return value;
   }
-  return { base, roots, access, command, call, recipe: root => ({ repositoryRoot: root, branch: 'main', path: 'manual.ditamap', model: 'ML307G', filterPath: 'g.ditaval', prefixes: true }) };
+  return { base, roots, access, command, call, git, handle, recipe: root => ({ repositoryRoot: root, branch: 'main', path: 'manual.ditamap', model: 'ML307G', filterPath: 'g.ditaval', prefixes: true }) };
 }
 test('isolated captures from different repositories keep same-path documents and saved changes separate', async t => {
   const { roots, call, recipe, command } = await setup(t);
@@ -151,6 +151,52 @@ test('simultaneous catalog requests share the two active source slots', async t 
   assert.equal(results.filter(item => item.status === 'fulfilled').length, 2);
   const rejected = results.filter(item => item.status === 'rejected'); assert.equal(rejected[0].reason.status, 429);
   assert.equal((await call('catalog', { repositoryRoot: root })).root, root);
+});
+
+test('disconnecting capture, catalog and verification aborts repository work and releases slots', { timeout: 20000 }, async t => {
+  const { EventEmitter } = require('node:events');
+  const { roots: [root], call, recipe, git, handle } = await setup(t);
+  const capture = await call('capture', recipe(root));
+  const original = git.runGit; let pending = [], hold = true;
+  t.mock.method(git, 'runGit', (args, options) => {
+    if (!hold) return original(args, options);
+    return new Promise((resolve, reject) => {
+      assert.ok(options.signal); pending.push(options.signal);
+      const cancel = () => reject(Object.assign(Error('cancelled'), { name: 'AbortError' }));
+      options.signal.addEventListener('abort', cancel, { once: true });
+      if (options.signal.aborted) cancel();
+    });
+  });
+  for (const endpoint of ['capture', 'catalog', 'verify']) {
+    pending = []; hold = true;
+    const requests = Array.from({ length: 2 }, () => {
+      const body = endpoint === 'verify' ? capture.receipt : recipe(root);
+      const req = Object.assign(new EventEmitter(), { method: 'POST', headers: {}, async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)); } });
+      const res = Object.assign(new EventEmitter(), { writeHead() { assert.fail('must not send a cancelled response'); } });
+      return { req, res, task: handle(req, res, '/api/knowledge/' + endpoint) };
+    });
+    while (pending.length < 2) await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(call('catalog', recipe(root)), error => error.status === 429);
+    for (const request of requests) { request.res.destroyed = true; request.res.emit('close'); }
+    await Promise.all(requests.map(request => request.task));
+    assert.ok(pending.every(signal => signal.aborted));
+    for (const request of requests) { assert.equal(request.res.listenerCount('close'), 0); assert.equal(request.req.listenerCount('aborted'), 0); }
+    hold = false;
+    assert.equal((await call('catalog', recipe(root))).root, root);
+  }
+});
+
+test('Git cancellation terminates a running child and preserves AbortError', { timeout: 10000 }, async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dita-git-cancel-'));
+  const previous = process.env.GIT_EXECUTABLE, controller = new AbortController();
+  process.env.GIT_EXECUTABLE = process.execPath;
+  t.after(async () => { controller.abort(); if (previous === undefined) delete process.env.GIT_EXECUTABLE; else process.env.GIT_EXECUTABLE = previous; await fs.rm(dir, { recursive: true, force: true }); });
+  const marker = path.join(dir, 'pid'), git = createGitService({ getRoot: () => dir });
+  const result = git.runGit(['-e', 'require("node:fs").writeFileSync(' + JSON.stringify(marker) + ', String(process.pid)); setInterval(() => {}, 1000);'], { signal: controller.signal });
+  const rejected = assert.rejects(result, { name: 'AbortError' });
+  while (!await fs.stat(marker).catch(() => null)) await new Promise(resolve => setTimeout(resolve, 10));
+  const pid = Number(await fs.readFile(marker, 'utf8')); controller.abort(); await rejected;
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
 });
 test('knowledge capture skips only the shared support Topics and keeps their published children', async t => {
   const { roots: [root], call, recipe } = await setup(t);

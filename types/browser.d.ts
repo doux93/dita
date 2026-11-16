@@ -7,6 +7,8 @@ declare global {
   var DitaKnowledgeSemantic: typeof import('../public/knowledge-semantic');
   var DitaKnowledgePackage: typeof import('../public/knowledge-package');
   var DitaKnowledgeReader: typeof import('../public/knowledge-reader');
+  var DitaKnowledgeLimits: typeof import('../public/knowledge-limits');
+  var DitaKnowledgeSearchProfile: typeof import('../public/knowledge-search-profile');
   var DitaKnowledgeZip: typeof import('../public/knowledge-zip');
   var DitaDiffCore: typeof import('../public/diff-core');
   var DitaReviewStore: typeof import('../public/review-store');

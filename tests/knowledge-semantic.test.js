@@ -7,6 +7,40 @@ const row = (text, manualId = 'a') => ({ manualId, manualTitle: 'HTTP', title: '
 const countTokens = text => text.length + 2;
 const vector = column => { const value = Array(512).fill(0); value[column] = 1; return value; };
 
+test('all retrieval modes preserve normalized numeric and error-code constraints without inference', async t => {
+  const semantic = require('../lib/knowledge-semantic');
+  t.mock.method(semantic.encoder, 'encode', async () => { throw Error('Exact queries must not load the model'); });
+  const records = [{ ...row('HTTP error code 656，return -2，status 0x2f，1.25。'), module: 'HTTP', mode: 'AT' }];
+  const chunks = await chunksFor(records, countTokens), index = createIndex(chunks, chunks.map(() => vector(0)));
+  const engine = createSearchEngine(), lexicalIndex = engine.build(records);
+  for (const query of ['HTTP返回99999是什么错误', 'HTTP error code 99999', 'HTTP status 0xFFFF', 'return -17', '0xFFFF', '-17', '1.2', 'ＨＴＴＰ ｅｒｒｏｒ ９９９９９']) {
+    assert.equal(semantic.requiresLexical(query), true, query);
+    const lexical = engine.search(records, lexicalIndex, query);
+    assert.deepEqual(lexical, [], query);
+    for (const semanticOnly of [true, false]) assert.deepEqual(await semantic.search(records, index, query, lexical, { semanticOnly }), [], query);
+  }
+  for (const query of ['HTTP error 656', 'HTTP status 0x2F', 'return -2', '1.25', '０ｘ２Ｆ']) {
+    const lexical = engine.search(records, lexicalIndex, query);
+    assert.equal(lexical.length, 1, query);
+    assert.deepEqual(await semantic.search(records, index, query, lexical), lexical);
+    assert.deepEqual(await semantic.search(records, index, query, lexical, { manualId: 'other' }), []);
+  }
+});
+
+test('semantic evidence retains the winning structural block and linked-note anchors', async t => {
+  const structure = require('../public/knowledge-structure'), semantic = require('../lib/knowledge-semantic');
+  t.mock.method(semantic.encoder, 'encode', async () => [vector(0)]);
+  const values = { kind: 'table-row', section: ['连接配置'], context: ['参数：timeout'], text: '等待时间为 30 秒。', notes: [{ id: 'fn1', text: '重试前释放连接。' }] };
+  const unit = { ...values, id: 'b-timeout', sourceAnchor: 'timeout-row', fingerprint: structure.fingerprint(values) };
+  const record = { ...row(values.text), sourcePath: 'topics/http.dita' };
+  record.structure = structure.seal(record.title, record.text, [unit]);
+  const chunks = await chunksFor([record], countTokens), index = createIndex(chunks, [vector(0)]);
+  const [hit] = await semantic.search([record], index, '连接等待多久', []);
+  assert.equal(hit.chunk.unitId, unit.id); assert.equal(hit.chunk.sourceAnchor, 'timeout-row');
+  assert.equal(hit.chunk.sourcePath, 'topics/http.dita'); assert.deepEqual(hit.chunk.noteIds, ['fn1']);
+  assert.match(hit.excerpt, /参数：timeout/); assert.match(hit.excerpt, /重试前释放连接/);
+});
+
 test('semantic chunks keep exact chapter offsets, overlap and stable content binding', async () => {
   const records = [row('说明内容。'.repeat(180))], chunks = await chunksFor(records, countTokens);
   assert.ok(chunks.length > 1);

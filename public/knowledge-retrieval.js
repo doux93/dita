@@ -33,6 +33,18 @@
       var text = value == null ? "" : String(value);
       return (text.normalize ? text.normalize("NFKC") : text).toLowerCase().trim();
     }
+    function technicalTokens(value) {
+      return normalize(value).match(/(?:at\+)?[a-z_][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*|-?(?:0x[0-9a-f]+|\d+(?:\.\d+)*)/g) || [];
+    }
+    // Query routing and candidate generation must use exactly the same rules.
+    function queryConstraints(query) {
+      var raw = normalize(query), numericPattern = /^-?(?:0x[0-9a-f]+|\d+(?:\.\d+)*)$/;
+      var numeric = numericPattern.test(raw);
+      var symbol = /^(?:at\+)[a-z0-9_]+$/.test(raw) || /^[a-z_][a-z0-9_]*_[a-z0-9_]*$/.test(raw);
+      var codes = numeric ? [raw] : /错误|状态码|返回值|结果码|返回|\berror\b|\bstatus\b|\breturn\b/.test(raw)
+        ? Array.from(new Set(technicalTokens(raw).filter(function (term) { return numericPattern.test(term); }))) : [];
+      return { numeric: numeric, symbol: symbol, codes: codes, requiresLexical: numeric || symbol || codes.length > 0 };
+    }
     function array(value) { return Array.isArray(value) ? value : value ? [value] : []; }
     function mode(value) {
       value = normalize(value);
@@ -72,7 +84,7 @@
       }
       function features(value) {
         var text = canonical(value), words = new Set(), grams = new Set();
-        var latin = text.match(/(?:at\+)?[a-z_][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*|-?(?:0x[0-9a-f]+|\d+(?:\.\d+)*)/g) || [];
+        var latin = technicalTokens(text);
         latin.forEach(function (word) {
           words.add(word);
           if (word.indexOf("_") >= 0) word.split("_").forEach(function (part) {
@@ -277,8 +289,7 @@
         var raw = normalize(query), limit = clampLimit(settings.limit, 20);
         if (!raw || !limit) return [];
         var features = tokenizer.features(query), candidates = new Set(), exact = symbols.get(raw);
-        var codeQuery = /^(?:at\+)[a-z0-9_]+$/.test(raw) || /^[a-z_][a-z0-9_]*_[a-z0-9_]*$/.test(raw);
-        var numericQuery = /^-?(?:0x[0-9a-f]+|\d+(?:\.\d+)*)$/.test(raw);
+        var constraints = queryConstraints(query), codeQuery = constraints.symbol, numericQuery = constraints.numeric;
         // Known symbols bypass text frequency. A definition always precedes its usages.
         if (exact || codeQuery) {
           var names = exact ? [raw] : symbolNames.filter(function (name) { return name.indexOf(raw) === 0; });
@@ -311,8 +322,7 @@
         }
         // Codes in an error/status question are evidence constraints, including
         // when the query also contains natural-language words.
-        var requiredCodes = /错误|状态码|返回值|结果码|返回|\berror\b|\bstatus\b|\breturn\b/.test(raw)
-          ? Array.from(features.words).filter(function (term) { return /^-?(?:0x[0-9a-f]+|\d+(?:\.\d+)*)$/.test(term); }) : [];
+        var requiredCodes = constraints.codes;
         if (requiredCodes.some(function (term) { return !postings.has("w:" + term); })) return [];
         features.words.forEach(function (term) {
           (postings.get("w:" + term) || []).forEach(function (id) { candidates.add(id); });
@@ -434,7 +444,7 @@
   
       return { search: search, suggest: suggest, count: entries.length, indexStatus: restored ? "restored" : "built" };
     }
-    return { create: create, compile: compile, normalize: normalize, version: "1.2.2" };
+    return { create: create, compile: compile, normalize: normalize, queryConstraints: queryConstraints, version: "1.2.2" };
   }
   const api = { createSdkSearch };
   if (typeof module !== 'undefined') module.exports = api; else root.DitaKnowledgeRetrieval = api;

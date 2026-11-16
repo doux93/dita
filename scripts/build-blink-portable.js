@@ -30,8 +30,8 @@ async function main() {
   try {
     const bundle = path.join(stage, 'blink-cli'), app = path.join(bundle, 'runtime', 'app');
     await fs.mkdir(app, { recursive: true });
-    const files = ['bin/blink-cli.js', 'lib/knowledge-book.js', 'lib/knowledge-semantic.js', 'lib/knowledge-index.js', 'lib/knowledge-vector-cache.js', 'lib/semantic-encoder.js', 'lib/knowledge-structure.js',
-      'public/knowledge-search.js', 'public/knowledge-retrieval.js', 'public/knowledge-semantic.js', 'public/knowledge-structure.js'];
+    const files = ['bin/blink-cli.js', 'lib/knowledge-book.js', 'lib/abort.js', 'lib/knowledge-semantic.js', 'lib/knowledge-index.js', 'lib/knowledge-vector-cache.js', 'lib/semantic-encoder.js', 'lib/knowledge-structure.js',
+      'public/knowledge-search.js', 'public/knowledge-search-profile.js', 'public/knowledge-retrieval.js', 'public/knowledge-semantic.js', 'public/knowledge-structure.js', 'public/knowledge-limits.js'];
     for (const name of files) { await fs.mkdir(path.dirname(path.join(app, name)), { recursive: true }); await fs.copyFile(path.join(root, name), path.join(app, name)); }
     await fs.cp(path.join(modelRoot, PROFILE.model), path.join(bundle, 'runtime', 'models', PROFILE.model), { recursive: true });
     await fs.cp(path.join(root, 'docs', 'licenses'), path.join(bundle, 'runtime', 'licenses'), { recursive: true });
