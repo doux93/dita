@@ -51,6 +51,19 @@ test('a branch, tag or commit reads Git objects without checking out over dirty 
   assert.equal(await fs.readFile(source, 'utf8'), disk); assert.equal(command(root, 'branch', '--show-current'), 'main');
   await assert.rejects(call('capture', { ...recipe(root), branch: 'release' }), /与方案/);
 });
+test('saved and Git publication snapshots reject missing targets even when an archived namesake exists', async t => {
+  const { roots: [root], call, recipe, command } = await setup(t);
+  await fs.mkdir(path.join(root, 'topics/archive'));
+  await fs.rename(path.join(root, 'topics/a.dita'), path.join(root, 'topics/archive/a.dita'));
+  command(root, 'add', '.');
+  command(root, '-c', 'user.name=QA', '-c', 'user.email=qa@example.invalid', 'commit', '-qm', 'archive topic without updating reference');
+  for (const revision of ['', 'HEAD']) {
+    await assert.rejects(call('capture', { ...recipe(root), revision }), /来源文件不存在.*topics\/a\.dita/);
+  }
+  await fs.writeFile(path.join(root, 'manual.ditamap'), '<map><topicref href="topics/archive/a.dita"/></map>');
+  const exact = await call('capture', recipe(root));
+  assert.deepEqual(exact.snapshot.files.map(([name]) => name), ['topics/archive/a.dita']);
+});
 test('missing and malformed settings, symlinks and unregistered roots fail without arbitrary reads', async t => {
   const { base, roots: [root], call, access, recipe } = await setup(t);
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'dita-outside-')); t.after(() => fs.rm(outside, { recursive: true, force: true }));
