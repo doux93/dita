@@ -120,6 +120,17 @@ test('moving or inserting a reference cannot silently change inherited publicati
   await assert.rejects(editMap(override, { operation: 'addTopicref', sourcePath: '0', href: 'new.dita' }, async href => href), /external|外部/);
 });
 
+test('structural moves cannot cross local descendants flattened out of a hidden external parent', async () => {
+  const source = '<map><topicref href="a.dita"/><topichead scope="external"><topicref scope="local" href="b.dita"/></topichead><topicref href="c.dita"/></map>';
+  assert.deepEqual(createMapReader().describe(parseXml(source).root, 'main.ditamap').children.map(node => node.path), ['a.dita', 'b.dita', 'c.dita']);
+  for (const [operation, sourcePath] of [['moveDown', '0'], ['moveUp', '2'], ['demote', '2'], ['promote', '1.0']]) {
+    await assert.rejects(editMap(source, { operation, sourcePath }), error => error.status === 409 && /源码/.test(error.message));
+  }
+  const siblings = source.replace('href="b.dita"/>', 'href="b.dita"/><topicref scope="local" href="d.dita"/>');
+  const reordered = await editMap(siblings, { operation: 'moveDown', sourcePath: '1.0' });
+  assert.deepEqual(createMapReader().describe(parseXml(reordered.content).root, 'main.ditamap').children.map(node => node.path), ['a.dita', 'd.dita', 'b.dita', 'c.dita']);
+});
+
 test('unsupported Map bases are rejected before resolving or editing references', async () => {
   for (const source of [
     '<map xml:base="topics/"><topicref href="a.dita"/></map>',
