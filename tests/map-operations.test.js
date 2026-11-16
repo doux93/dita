@@ -90,3 +90,46 @@ test('external scope is inherited without resolving links, while explicit local 
   assert.deepEqual(reader.describe(parseXml('<map scope="external"><topicref href="/remote.dita"/></map>').root, 'main.ditamap').children, []);
   assert.throws(() => reader.describe(parseXml('<map scope="external"><topicref scope="local" href="/bad.dita"/></map>').root, 'main.ditamap'), /相对路径/);
 });
+
+test('structural edits use visible siblings and cannot target an omitted external reference', async () => {
+  const external = '<topicref scope="exte&#114;nal" href="https://example.invalid/manual"/>';
+  const local = '<topicref href="local.dita"/>';
+  const source = '<map>' + external + local + '</map>';
+  await assert.rejects(editMap(source, { operation: 'demote', sourcePath: '1' }), error => error.status === 409);
+  await assert.rejects(editMap(source, { operation: 'moveUp', sourcePath: '1' }), error => error.status === 409);
+  await assert.rejects(editMap(source, { operation: 'remove', sourcePath: '0' }), /external|外部/);
+  const withPrevious = '<map><topicref href="first.dita"/>' + external + local + '</map>';
+  const moved = await editMap(withPrevious, { operation: 'demote', sourcePath: '2' });
+  assert.equal(moved.content, '<map><topicref href="first.dita">' + local + '</topicref>' + external + '</map>');
+  assert.equal(moved.selectedSourcePath, '0.0');
+  assert.equal(createMapReader().describe(parseXml(moved.content).root, 'main.ditamap').children[0].children[0].path, 'local.dita');
+  const reordered = await editMap(withPrevious, { operation: 'moveUp', sourcePath: '2' });
+  assert.equal(reordered.content, '<map>' + local + external + '<topicref href="first.dita"/></map>');
+});
+
+test('moving or inserting a reference cannot silently change inherited publication scope', async () => {
+  const resource = '<map><topichead processing-role="resource-only"><topicref href="a.dita"/></topichead><topicref href="b.dita"/></map>';
+  await assert.rejects(editMap(resource, { operation: 'promote', sourcePath: '0.0' }), /processing-role/);
+  await assert.rejects(editMap(resource, { operation: 'demote', sourcePath: '1' }), /processing-role/);
+  const explicit = resource.replace('href="b.dita"', 'href="b.dita" processing-role="normal"');
+  const moved = await editMap(explicit, { operation: 'demote', sourcePath: '1' });
+  assert.equal(createMapReader().describe(parseXml(moved.content).root, 'main.ditamap').children[0].children[1].processingRole, 'normal');
+  const external = '<map scope="external"><topichead scope="local"><topicref href="a.dita"/></topichead></map>';
+  await assert.rejects(editMap(external, { operation: 'promote', sourcePath: '0.0' }), /scope/);
+  const override = '<map scope="external"><topicref scope="local" href="a.dita"/></map>';
+  await assert.rejects(editMap(override, { operation: 'addTopicref', sourcePath: '0', href: 'new.dita' }, async href => href), /external|外部/);
+});
+
+test('unsupported Map bases are rejected before resolving or editing references', async () => {
+  for (const source of [
+    '<map xml:base="topics/"><topicref href="a.dita"/></map>',
+    '<map><topichead xml:base="topics/"><topicref href="a.dita"/></topichead></map>',
+    '<map><topicref xml:base="topics/" href="a.dita"/></map>'
+  ]) {
+    let reads = 0;
+    const reader = createMapReader(() => { reads++; return 'a.dita'; });
+    assert.throws(() => reader.describe(parseXml(source).root, 'main.ditamap'), /xml:base/);
+    assert.equal(reads, 0);
+    await assert.rejects(editMap(source, { operation: 'addTopichead', title: 'New' }), /xml:base/);
+  }
+});

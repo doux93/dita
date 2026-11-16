@@ -57,3 +57,30 @@ test('representable declared encodings, BOMs, CRLF and XML declarations survive 
     }
   }
 });
+
+test('valid UTF-8 replacement characters are content rather than a signal to reinterpret the encoding', async t => {
+  const root = await directory(t), file = path.join(root, 'topic.dita');
+  for (const text of ['��', '�X', '中文��']) {
+    for (const declaration of ['', '<?xml version="1.0" encoding="UTF-8"?>']) {
+      const source = declaration + '<topic><title>' + text + '</title></topic>';
+      assert.equal(decodeXmlBuffer(Buffer.from(source)), source);
+      await writeXmlFile(file, source);
+      assert.equal(await readXmlFile(file), source);
+    }
+  }
+});
+
+test('undecodable bytes and truncated UTF-16 fail without exposing replacement text for saving', async t => {
+  const root = await directory(t), file = path.join(root, 'broken.dita');
+  const invalid = [
+    Buffer.concat([Buffer.from('<topic>'), Buffer.from([0xff]), Buffer.from('</topic>')]),
+    Buffer.from([0xff, 0xfe, 0x3c]),
+    Buffer.from([0xfe, 0xff, 0x00, 0x3c, 0xd8, 0x00, 0x00, 0x3e])
+  ];
+  for (const bytes of invalid) {
+    await fs.writeFile(file, bytes);
+    assert.throws(() => decodeXmlBuffer(bytes), error => error.status === 400 && /编码|解码/.test(error.message));
+    await assert.rejects(readXmlFile(file), error => error.status === 400);
+    assert.deepEqual(await fs.readFile(file), bytes);
+  }
+});

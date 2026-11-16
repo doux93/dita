@@ -78,6 +78,13 @@ test('saved and Git knowledge captures omit external references and retain exact
   }
   assert.equal(await fs.readFile(path.join(root, 'manual.ditamap'), 'utf8'), content);
 });
+test('saved and Git captures refuse unsupported Map bases even when the wrong-path Topic exists', async t => {
+  const { roots: [root], call, recipe, command } = await setup(t);
+  await fs.writeFile(path.join(root, 'manual.ditamap'), '<map xml:base="topics/"><topicref href="a.dita"/></map>');
+  await fs.writeFile(path.join(root, 'a.dita'), '<topic id="wrong"><title>Wrong Topic</title><body><p>Wrong content</p></body></topic>');
+  command(root, 'add', '.'); command(root, '-c', 'user.name=QA', '-c', 'user.email=qa@example.invalid', 'commit', '-qm', 'unsupported Map base');
+  for (const revision of ['', 'HEAD']) await assert.rejects(call('capture', { ...recipe(root), revision }), /xml:base/);
+});
 test('missing and malformed settings, symlinks and unregistered roots fail without arbitrary reads', async t => {
   const { base, roots: [root], call, access, recipe } = await setup(t);
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'dita-outside-')); t.after(() => fs.rm(outside, { recursive: true, force: true }));

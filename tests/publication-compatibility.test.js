@@ -93,6 +93,12 @@ test('Map validation skips external targets but still rejects unsupported local 
     assert.throws(() => resolver.validateMap(map('<topicref scope="local" href="' + href + '"/>'), ''), pattern);
   }
 });
+test('publication refuses Map xml:base instead of publishing an incorrectly resolved Topic', () => {
+  const source = '<map xml:base="topics/"><topicref href="a.dita"/></map>';
+  const files = new Map([['a.dita', { current: '<topic id="wrong"><title>Wrong target</title></topic>' }]]);
+  assert.throws(() => publication.preparePublication({ map: { source, children: [{ type: 'file', path: 'a.dita' }] }, files }), /xml:base/);
+  assert.throws(() => resolver.validateMap('<map><topichead xml:base="topics/"><topicref href="a.dita"/></topichead></map>', ''), /xml:base/);
+});
 test('missing normal links and Markdown merged cells stop instead of producing a broken manual', async () => {
   buildMockDom();
   const m = { title: 'Manual', children: [{ type: 'file', path: 'a.dita' }] };
