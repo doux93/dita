@@ -17,7 +17,7 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
   for (const repo of [http, extra]) for (const args of [['init'], ['add', '.'], ['-c', 'user.name=Acceptance', '-c', 'user.email=acceptance@example.invalid', 'commit', '-qm', 'Acceptance copy']]) execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
   execFileSync('git', ['branch', 'alternate'], { cwd: http });
   const port = await new Promise(resolve => { const server = net.createServer(); server.listen(0, '127.0.0.1', () => { const n = server.address().port; server.close(() => resolve(n)); }); });
-  const server = spawn(process.execPath, ['server.js'], { cwd: path.join(__dirname, '..'), env: { ...process.env, DOCS_ROOT: http, REPOSITORIES_ROOT: temporary, PORT: String(port), DITA_AI_CONFIG_FILE: path.join(temporary, 'ai.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const server = spawn(process.execPath, ['server.js'], { cwd: path.join(__dirname, '..'), env: { ...process.env, DOCS_ROOT: http, REPOSITORIES_ROOT: temporary, PORT: String(port), DITA_SEMANTIC_CACHE_DIR: path.join(temporary, 'vector-cache'), DITA_AI_CONFIG_FILE: path.join(temporary, 'ai.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
   let browser;
   t.after(async () => { await browser?.close(); if (server.exitCode == null) { server.kill(); await new Promise(resolve => server.once('exit', resolve)); } await fs.rm(temporary, { recursive: true, force: true }); });
   await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(Error('server timeout')), 10000); server.stdout.once('data', () => { clearTimeout(timer); resolve(); }); server.once('error', reject); });
@@ -80,7 +80,7 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
   });
   if (process.env.BLINK_MODELS) await stage('the normal export entry produces a content-bound offline semantic index', async () => {
     await page.click('#knowledgeButton'); await page.check('#knowledgeSemantic');
-    const result = await download(), archive = unzipSync(new Uint8Array(result.bytes));
+    const firstStarted = Date.now(), result = await download(), firstMs = Date.now() - firstStarted, archive = unzipSync(new Uint8Array(result.bytes));
     const book = JSON.parse(strFromU8(archive['docs/knowledge.json']));
     const { flatten } = require('../lib/knowledge-book'), { validate } = require('../public/knowledge-semantic');
     assert.ok(book.semantic.chunks.length > 24);
@@ -91,7 +91,32 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     const configuration = book.manuals[0].entries.find(entry => entry.title.includes('AT+MHTTPCFG'));
     assert.ok(configuration.structure.units.some(unit => unit.text.includes('非缓存模式') && unit.context.some(value => value.includes('<cached>'))), 'real DITA enumeration must retain its parameter definition');
     if (process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT) { await fs.mkdir(process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT, { recursive: true }); await fs.writeFile(path.join(process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT, 'HTTP-structured-knowledge.zip'), result.bytes); }
-    await page.uncheck('#knowledgeSemantic'); await page.click('#knowledgeClose');
+    assert.match(await page.locator('#knowledgeVectorStatus').innerText(), /复用 0 份，重新生成 1 份/);
+    const cachedStarted = Date.now(), cached = await download(), cachedMs = Date.now() - cachedStarted;
+    assert.match(await page.locator('#knowledgeVectorStatus').innerText(), /复用 1 份，重新生成 0 份/);
+    const cachedBook = JSON.parse(strFromU8(unzipSync(new Uint8Array(cached.bytes))['docs/knowledge.json']));
+    assert.deepEqual(cachedBook.semantic, book.semantic);
+    t.diagnostic('Real HTTP vector export: first=' + firstMs + 'ms; cached=' + cachedMs + 'ms; chunks=' + book.semantic.chunks.length);
+    await page.locator('.knowledge-vector-options summary').click(); await page.check('#knowledgeRebuild');
+    await download(); assert.match(await page.locator('#knowledgeVectorStatus').innerText(), /复用 0 份，重新生成 1 份/);
+    assert.equal(await page.locator('#knowledgeRebuild').isChecked(), false);
+    await page.uncheck('#knowledgeSemantic'); assert.equal(await page.locator('#knowledgeRebuild').isDisabled(), true); await page.click('#knowledgeClose');
+  });
+  if (process.env.BLINK_MODELS) await stage('cancelling vector export ignores late responses and preserves the one-time rebuild choice', async () => {
+    await page.click('#knowledgeButton'); await page.check('#knowledgeSemantic');
+    if (!await page.locator('.knowledge-vector-options').evaluate(node => node.open)) await page.locator('.knowledge-vector-options summary').click();
+    await page.check('#knowledgeRebuild');
+    const endpoint = '**/api/knowledge/semantic'; let release;
+    const hold = new Promise(resolve => { release = resolve; }), downloads = [];
+    const listener = download => downloads.push(download); page.on('download', listener);
+    await page.route(endpoint, async route => { await hold; try { await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'error', message: 'LATE_VECTOR_ERROR' }) + '\n' }); } catch (cause) { if (!/closed|handled|cancel|abort/i.test(cause.message)) throw cause; } });
+    const request = page.waitForRequest(request => request.url().endsWith('/api/knowledge/semantic'));
+    await page.click('#knowledgeDownload'); await request; assert.equal(await page.locator('#knowledgeBatchCancel').innerText(), '取消向量生成');
+    await page.click('#knowledgeBatchCancel'); assert.match(await page.locator('#knowledgeStatus').innerText(), /手册来源仍可用于重新导出/); await page.click('#knowledgeClose'); release();
+    await page.unroute(endpoint); await page.click('#knowledgeButton'); await page.locator('#knowledgeDownload:not([disabled])').waitFor();
+    assert.equal(downloads.length, 0); assert.doesNotMatch(await page.locator('#knowledgeError').innerText(), /LATE_VECTOR_ERROR/);
+    assert.equal(await page.locator('#knowledgeRebuild').isChecked(), true);
+    page.removeListener('download', listener); await page.uncheck('#knowledgeRebuild'); await page.uncheck('#knowledgeSemantic'); await page.click('#knowledgeClose');
   });
   await stage('switching repositories preserves the first snapshot, namespaces same-path Topics and excludes other models from the index', async () => {
     await page.selectOption('#repositorySelect', extra); await page.waitForFunction(extra => window.DitaApp.state.root === extra, extra);
@@ -102,6 +127,11 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     assert.equal(await page.locator('.knowledge-part').count(), 1, 'a missing body profile must not silently add another model');
     await page.locator('#knowledgeFilter option[value="ml307g.ditaval"]').waitFor({ state: 'attached' }); await page.selectOption('#knowledgeFilter', 'ml307g.ditaval'); await addCurrent();
     assert.equal(await page.locator('.knowledge-part').count(), 2);
+    if (process.env.BLINK_MODELS) {
+      await page.check('#knowledgeSemantic'); await download();
+      assert.match(await page.locator('#knowledgeVectorStatus').innerText(), /复用 1 份，重新生成 1 份/);
+      await page.uncheck('#knowledgeSemantic');
+    }
     const result = await download(), files = unzipSync(new Uint8Array(result.bytes)), manifest = JSON.parse(strFromU8(files['docs/manifest.json']));
     assert.equal(manifest.manuals.length, 2); assert.equal(new Set(manifest.manuals.map(item => item.id)).size, 2);
     const content = strFromU8(files['docs/index.html']); assert.doesNotMatch(content, /ONLY_N_PRIVATE_NOTE|ONLY_N_PRIVATE_BODY/); assert.match(content, /ONLY_G_NOTE/);

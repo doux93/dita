@@ -33,6 +33,7 @@ function parseArgs(args) {
       if (options.merge.length > 29) throw Error('最多合并 30 个知识库包');
     } else if (arg === '--json') options.json = true;
     else if (arg === '--list') options.list = true;
+    else if (arg === '--rebuild') options.rebuild = true;
     else if (arg === '--info') options.info = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (values.has(arg)) {
@@ -46,6 +47,7 @@ function parseArgs(args) {
     options.limit = Number(options.limit);
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 50) throw new Error('--limit 必须是 1～50 的整数');
   }
+  if (options.rebuild && !options['build-index']) throw Error('--rebuild 仅用于 --build-index');
   if (options.chunking && (!options['build-index'] || !['structure', 'legacy'].includes(options.chunking))) throw Error('--chunking 仅用于 --build-index，可选 structure 或 legacy');
   if (options.search && !['auto', 'lexical', 'hybrid', 'semantic'].includes(options.search)) throw Error('--search 须为 auto、lexical、hybrid 或 semantic');
   if ([options.list, options.info, Boolean(options.get), Boolean(options['build-index'])].filter(Boolean).length > 1) throw new Error('管理命令不能同时使用');
@@ -107,6 +109,7 @@ async function main() {
       '  --get <引用>      读取完整章节，引用格式为 manualId#anchor',
       '  --search <方式>   auto（默认）、lexical、hybrid、semantic；后两项需要离线模型与语义索引',
       '  --build-index <文件.json>  为发布内容生成离线语义索引，写入新 JSON 文件',
+      '  --rebuild         本次重新生成全部手册向量，并更新本机缓存',
       '  --chunking <方式> structure（默认）或 legacy；生成索引时用于新旧分片对照',
       '  --merge <路径>    加入其它手册包，可重复指定；产品型号和 SDK 版本须一致',
       '',
@@ -130,21 +133,17 @@ async function main() {
       const target = path.resolve(options['build-index']);
       if (!target.endsWith('.json')) throw Error('语义知识库请使用 .json 文件名');
       if (fs.existsSync(target)) throw Error('输出文件已存在，请使用新的文件名：' + target);
-      const legacy = options.chunking === 'legacy', profile = legacy ? semanticData.LEGACY_PROFILE : semanticData.PROFILE;
-      let reusable = semanticData.compatible(book.semantic) && book.semantic.profile.id === profile.id;
-      if (reusable) {
-        try { semanticData.validate(records, book.semantic); }
-        catch (cause) { reusable = false; process.stderr.write('现有索引需要重建：' + cause.message + '\n'); }
-      }
+      const legacy = options.chunking === 'legacy';
       const structuredChapters = records.filter(record => record.structure).length;
       if (!legacy && structuredChapters < records.length) process.stderr.write((records.length - structuredChapters) + ' 个章节只有纯文本，将使用长度分片；从工作台重新核对发布可保留结构。\n');
-      const index = reusable ? book.semantic : await semantic.build(records, (done, total) => process.stderr.write('正在离线向量化 ' + done + '/' + total + '\n'), { legacy });
-      semanticData.validate(records, index);
+      const { index, stats, warnings } = await require('../lib/knowledge-index').defaultBuilder().book(book, { seeds: books, legacy, force: !!options.rebuild,
+        onProgress: progress => process.stderr.write(progress.manual + ' · ' + (progress.source === 'generated' ? '重新生成' : progress.source ? '复用向量' : '正在向量化 ' + progress.done + '/' + progress.total) + '\n') });
+      for (const warning of warnings) process.stderr.write(warning + '\n');
       const output = { ...book, index: undefined, semantic: index,
         manuals: book.manuals.map(({ body: _body, toc: _toc, ...manual }) => manual) };
       fs.writeFileSync(target, JSON.stringify(output), { flag: 'wx' });
-      if (options.json) outputJson({ schema: 1, path: target, model: book.model, profile: index.profile.id, chunks: index.chunks.length, structuredChapters, fallbackChapters: records.length - structuredChapters });
-      else process.stdout.write('已生成离线语义知识库：' + target + '\n');
+      if (options.json) outputJson({ schema: 1, path: target, model: book.model, profile: index.profile.id, chunks: index.chunks.length, ...stats, warnings, structuredChapters, fallbackChapters: records.length - structuredChapters });
+      else process.stdout.write('已生成离线语义知识库：' + target + '\n向量：复用 ' + stats.reusedManuals + ' 份，重新生成 ' + stats.rebuiltManuals + ' 份 · ' + stats.totalChunks + ' 个片段\n');
       return;
     }
     const engine = createSearchEngine();

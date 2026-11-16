@@ -2,7 +2,7 @@
 (function (root) {
   function createController(A) {
     const get = id => document.getElementById(id), parts = new Map(), recipes = new Map(), preferences = new Map(), sourceStates = new Map(), capture = root.DitaKnowledgeCapture.createCapture(A);
-    let busy = false, loading = false, filterFailed = false, operation = 0, abort, compiled = null, chosenModel = '', preferenceKey = '';
+    let busy = false, generatingVectors = false, loading = false, filterFailed = false, operation = 0, abort, compiled = null, chosenModel = '', preferenceKey = '';
     const batchCapture = root.DitaKnowledgeBatch.createBatchCapture(A);
     const workspaceKey = () => JSON.stringify([A.state.root, A.state.currentBranch || '']);
     const sourceKey = (root, path) => JSON.stringify([root, path]);
@@ -10,7 +10,7 @@
     const chunkPreview = root.DitaKnowledgeChunkPreview.createController({ A, parts: readyParts, error });
     const validModel = model => /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(model);
     const sameQuickSettings = (left, right) => ['filterPath', 'prefixes', 'version', 'mode', 'module'].every(field => left[field] === right[field]);
-    function invalidate() { compiled = null; }
+    function invalidate() { compiled = null; get('knowledgeVectorStatus').textContent = ''; }
     function remember() {
       if (!preferenceKey || loading || filterFailed) return;
       preferences.set(preferenceKey, { version: get('knowledgeVersion').value, filterPath: get('knowledgeFilter').value,
@@ -45,9 +45,11 @@
     function readyParts() { return [...recipes].map(([key, recipe]) => parts.has(key) ? root.DitaKnowledgeMetadata.applyMetadata(parts.get(key), recipe) : null); }
     function controls() {
       get('knowledgeSemantic').disabled = busy;
+      get('knowledgeRebuild').disabled = busy || !get('knowledgeSemantic').checked;
       for (const id of ['knowledgeTitle', 'knowledgeSdk', 'knowledgeVersion', 'knowledgeFilter', 'knowledgePrefixes', 'knowledgeMode', 'knowledgeModule', 'knowledgePlan', 'knowledgePlanSave', 'knowledgePlanLoad', 'knowledgePlanNew', 'knowledgePlanExport', 'knowledgePlanImport', 'knowledgeSourcesAdd', 'knowledgeBatchCheck', 'knowledgeBatchRetry']) get(id).disabled = busy;
       get('knowledgeAdd').disabled = busy || loading || filterFailed; get('knowledgeFilter').disabled = busy || loading;
       get('knowledgeBatchCheck').disabled = busy || loading || !recipes.size; get('knowledgeBatchRetry').disabled = busy || loading || ![...recipes.keys()].some(key => !parts.has(key)); get('knowledgeBatchCancel').hidden = !busy;
+      get('knowledgeBatchCancel').textContent = generatingVectors ? '取消向量生成' : '取消核对';
       get('knowledgeModel').disabled = busy || recipes.size > 0;
       const ready = recipes.size > 0 && readyParts().every(part => part && !part.staleMetadata.length);
       get('knowledgePreview').disabled = busy || !ready; get('knowledgeChunkPreview').disabled = busy || !ready; get('knowledgeDownload').disabled = busy || !ready; get('knowledgeClear').disabled = busy || !recipes.size;
@@ -142,7 +144,7 @@
       get('knowledgeModels').replaceChildren(...[...models].map(value => new Option(value, value)));
       get('knowledgeDialog').showModal(); renderCollection(); await refreshSources();
     }
-    function cancel() { remember(); abort?.abort(); operation++; for (const [key, value] of sourceStates) if (!parts.has(key) && value.state !== 'error') sourceStates.set(key, { state: 'pending', message: '已取消，需重新核对' }); busy = false; loading = false; controls(); }
+    function cancel() { remember(); abort?.abort(); operation++; for (const [key, value] of sourceStates) if (!parts.has(key) && value.state !== 'error') sourceStates.set(key, { state: 'pending', message: '已取消，需重新核对' }); busy = false; generatingVectors = false; loading = false; controls(); }
     async function add() {
       if (busy || loading || filterFailed) return;
       const model = get('knowledgeModel').value.trim(), version = get('knowledgeVersion').value.trim();
@@ -226,43 +228,31 @@
         error(''); let output = build();
         if (get('knowledgeSemantic').checked) {
           const request = structuredClone({ title: output.book.title, model: chosenModel, sdkVersion: output.book.sdkVersion, manuals: readyParts() });
-          const records = output.book.manuals.flatMap(manual => manual.entries.map(entry => ({ ...entry, manualId: manual.id, manualTitle: manual.title, mode: manual.mode, module: manual.module })));
-          const chunks = [], vectors = [], profile = root.DitaKnowledgeSemantic.PROFILE.id;
-          abort = new AbortController(); busy = true; controls();
-          for (const [position, record] of records.entries()) {
-            status('正在按模型 Token 预算分片 ' + (position + 1) + '/' + records.length + ' 个章节…');
-            const response = await A.api.request('/api/knowledge/chunks', { method: 'POST', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ record, position }), signal: abort.signal });
-            if (!response.ok) throw Error(await A.api.error(response));
-            const value = await response.json();
-            if (generation !== operation || workspace !== A.api.token) return;
-            if (value.profile !== profile || !Array.isArray(value.chunks)) throw Error('语义分片配置不兼容，请刷新工作台后重试');
-            chunks.push(...value.chunks);
-            if (chunks.length > 12000) throw Error('语义索引超过 12000 个片段，请减少手册后重试');
-          }
-          for (let start = 0; start < chunks.length; start += 16) {
-            status('正在生成离线语义索引 ' + start + '/' + chunks.length + ' 个片段…');
-            const response = await A.api.request('/api/knowledge/embed', { method: 'POST', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ profile, texts: chunks.slice(start, start + 16).map(chunk => chunk.text) }), signal: abort.signal });
-            if (!response.ok) throw Error(await A.api.error(response));
-            const value = await response.json();
-            if (generation !== operation || workspace !== A.api.token) return;
-            if (value.profile !== profile || !Array.isArray(value.vectors) || value.vectors.length !== Math.min(16, chunks.length - start)) throw Error('向量生成响应不完整，请重试');
-            vectors.push(...value.vectors);
-          }
-          output = root.DitaKnowledgePackage.buildPackage({ ...request, semantic: root.DitaKnowledgeSemantic.createIndex(chunks, vectors) });
+          abort = new AbortController(); busy = true; generatingVectors = true; controls();
+          const result = await root.DitaKnowledgeIndex.generate({ api: A.api, manuals: request.manuals, model: chosenModel, force: get('knowledgeRebuild').checked,
+            signal: abort.signal, current: () => generation === operation && workspace === A.api.token,
+            onProgress: progress => {
+              const text = progress.manual + ' · ' + (progress.source ? progress.source === 'generated' ? '已重新生成' : '已复用向量' : progress.total ? '正在生成 ' + progress.done + '/' + progress.total + ' 个片段' : '正在检查可复用向量…');
+              status('手册 ' + progress.position + '/' + progress.totalManuals + ' · ' + text);
+              get('knowledgeVectorStatus').textContent = '向量：复用 ' + progress.reusedManuals + ' 份，重新生成 ' + progress.rebuiltManuals + ' 份';
+            } });
+          if (generation !== operation || workspace !== A.api.token) return;
+          output = root.DitaKnowledgePackage.buildPackage({ ...request, semantic: result.index });
+          get('knowledgeVectorStatus').textContent = '向量：复用 ' + result.stats.reusedManuals + ' 份，重新生成 ' + result.stats.rebuiltManuals + ' 份 · ' + result.stats.totalChunks + ' 个片段' + (result.warnings.length ? '。' + result.warnings.join(' ') : '');
+          get('knowledgeRebuild').checked = false;
         }
         if (generation !== operation || workspace !== A.api.token) return;
         A.downloadText(output.zip, output.filename, 'application/zip');
         status('已发起下载：' + output.filename + (get('knowledgeSemantic').checked ? '；已附带 CLI 离线语义索引，网页提供章节阅读与关键词检索。' : '；解压后打开 docs/index.html。'));
         A.setStatus('离线知识库已生成：' + output.filename);
       } catch (cause) { if (generation === operation) error(cause.message); }
-      finally { if (generation === operation) { busy = false; controls(); } }
+      finally { if (generation === operation) { busy = false; generatingVectors = false; controls(); } }
     }
+    get('knowledgeSemantic').addEventListener('change', controls);
     get('knowledgeSourcesAdd').addEventListener('click', () => sources.show());
     get('knowledgeBatchCheck').addEventListener('click', () => batch());
     get('knowledgeBatchRetry').addEventListener('click', () => batch([...recipes.keys()].filter(key => !parts.has(key))));
-    get('knowledgeBatchCancel').addEventListener('click', () => { cancel(); renderCollection(); status('已取消核对，未完成来源需重新核对后发布。'); });
+    get('knowledgeBatchCancel').addEventListener('click', () => { const vectors = generatingVectors; cancel(); renderCollection(); if (vectors) get('knowledgeVectorStatus').textContent = '向量生成已取消，可重新导出。'; status(vectors ? '已取消向量生成，手册来源仍可用于重新导出。' : '已取消核对，未完成来源需重新核对后发布。'); });
     get('knowledgeButton').addEventListener('click', show); get('knowledgeAdd').addEventListener('click', add);
     get('knowledgeClose').addEventListener('click', () => { cancel(); get('knowledgeDialog').close(); }); get('knowledgeDialog').addEventListener('cancel', cancel);
     get('knowledgeChunkPreview').addEventListener('click', () => chunkPreview.show());

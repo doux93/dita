@@ -32,3 +32,16 @@ hydrate(bundle);
 bundle.receipt.files[0].sha256 = 'changed';
 // @ts-expect-error A Git revision is text, not an options object.
 createPlanStore(null).save({ ...plan, sources: [{ ...plan.sources[0], revision: { branch: 'main' } }] });
+
+import { defaultBuilder } from '../lib/knowledge-index';
+import { combineIndexes } from '../public/knowledge-semantic';
+const builder = defaultBuilder();
+builder.manual(manual, { model: 'ML307G', force: true, signal: new AbortController().signal });
+// @ts-expect-error Model scope must be a string.
+builder.manual(manual, { model: ['ML307G'] });
+// @ts-expect-error Snapshot entries are required for cache identity and validation.
+builder.manual({ id: 'a', title: 'HTTP' });
+declare const vectorResult: Awaited<ReturnType<typeof builder.book>>;
+// @ts-expect-error Reuse statistics are immutable publication results.
+vectorResult.stats.reusedManuals = 100;
+combineIndexes([builder.recordsFor(manual)], [vectorResult.index]);

@@ -150,6 +150,9 @@
         view.setFloat32((index * PROFILE.dimensions + column) * 4, value, true);
       });
     });
+    return encodeBytes(bytes);
+  }
+  function encodeBytes(bytes) {
     let binary = '';
     for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
     return btoa(binary);
@@ -179,6 +182,24 @@
     return { schema: 1, profile, chunks, vectors: encodeVectors(vectors) };
   }
 
-  const api = { PROFILE, LEGACY_PROFILE, sourceText, normalizeInput, compatible, chunksFor, legacyChunksFor, unitsFor, createIndex, validate };
+  function combineIndexes(groups, indexes) {
+    if (!groups.length || groups.length !== indexes.length || groups.length > 30) throw Error('组合向量的手册数量无效');
+    const profile = indexes[0]?.profile?.id === LEGACY_PROFILE.id ? LEGACY_PROFILE : PROFILE;
+    let count = 0, recordsOffset = 0;
+    const chunks = [], rows = [];
+    for (const [i, records] of groups.entries()) {
+      const index = indexes[i];
+      if (index?.profile?.id !== profile.id) throw Error('合并包的分片配置不一致，请统一重建');
+      if (count + index.chunks.length > 12000) throw Error('语义索引超过 12000 个片段，请减少手册后重试');
+      rows.push(validate(records, index)); count += index.chunks.length;
+      chunks.push(...index.chunks.map(chunk => ({ ...chunk, position: chunk.position + recordsOffset })));
+      recordsOffset += records.length;
+    }
+    const bytes = new Uint8Array(count * profile.dimensions * 4), view = new DataView(bytes.buffer); let offset = 0;
+    for (const values of rows) for (const value of values) { view.setFloat32(offset, value, true); offset += 4; }
+    return { schema: 1, profile, chunks, vectors: encodeBytes(bytes) };
+  }
+
+  const api = { PROFILE, LEGACY_PROFILE, sourceText, normalizeInput, compatible, chunksFor, legacyChunksFor, unitsFor, createIndex, validate, combineIndexes };
   if (typeof module !== 'undefined') module.exports = api; else root.DitaKnowledgeSemantic = api;
 })(typeof window === 'undefined' ? globalThis : window);
