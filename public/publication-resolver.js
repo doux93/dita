@@ -2,6 +2,7 @@
 (function (root) {
   const xml = typeof module !== 'undefined' ? require('./xml-source') : root.DitaXmlSource;
   const sax = typeof module !== 'undefined' ? require('./vendor/sax') : root.sax;
+  const mapContext = typeof module !== 'undefined' ? require('./map-context') : root.DitaMapContext;
   const topics = new Set(['topic', 'concept', 'task', 'reference']);
   function decode(value = '') { let out = ''; const p = sax.parser(true); p.ontext = s => { out += s; }; p.write('<v>' + value + '</v>').close(); return out; }
   const escape = value => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -48,9 +49,11 @@
   }
   function validateMap(source, model) {
     if (!source) return;
+    const contexts = new Map();
     walk(xml.inspectSource(source), (node, ancestors) => {
-      const scope = decode([...ancestors, node].reverse().find(parent => parent.attrs.scope)?.attrs.scope);
-      const external = scope === 'external';
+      const context = mapContext.inherit(node.attrs, contexts.get(ancestors.at(-1)), decode);
+      contexts.set(node, context);
+      const external = context.scope === 'external';
       const localSubmap = !external && (/ditamap/i.test(decode(node.attrs.format)) || /\.ditamap(?:#|$)/i.test(decode(node.attrs.href)));
       if (['mapref', 'ditavalref', 'keydef'].includes(node.name) || node.attrs.conref || node.attrs.conkeyref || node.attrs.keyref || node.attrs.keys || node.attrs.keyscope || localSubmap) throw new Error('Map 包含暂未支持的复用／键或子 Map，请先用完整 DITA 工具展开');
       if (model && (node.attrs.product || node.attrs.props || node.attrs.otherprops)) throw new Error('Map 级型号条件尚未展开，请先使用 Topic 内的注脚条件或完整 DITA 发布工具');

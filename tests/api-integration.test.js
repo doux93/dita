@@ -161,6 +161,43 @@ test('HTTP workflow protects edits, Git baselines, repository boundaries and wor
       assert.equal(await fs.readFile(destination, 'utf8'), content);
     } finally { await fs.rm(destination, { force: true }); }
   });
+  await t.test('nested Map Save As rejects unsupported bases and decoded absolute references before changing files', async () => {
+    const target = 'topics/guard.ditamap', newPath = 'topics/new-guard.ditamap';
+    const original = '<map><topicref href="a.dita"/></map>';
+    await fs.writeFile(path.join(repo, target), original);
+    try {
+      for (const content of [
+        '<map xml:base="other/"><topicref href="a.dita"/></map>',
+        '<map><topichead xml:base="other/"><topicref href="a.dita"/></topichead></map>',
+        '<map><topicref href="%2Ftmp/a.dita"/></map>',
+        '<map><topicref href="%43%3A%5Cprivate.dita"/></map>',
+        '<map><topicref scope="peer" href="a.dita"/></map>'
+      ]) {
+        for (const body of [
+          { path: newPath, content },
+          { path: target, content, overwrite: true, expectedContent: original }
+        ]) assert.equal((await request('/api/file', 'POST', body)).status, 400);
+        assert.equal(await fs.readFile(path.join(repo, target), 'utf8'), original);
+        await assert.rejects(fs.stat(path.join(repo, newPath)), { code: 'ENOENT' });
+      }
+    } finally { await fs.rm(path.join(repo, target), { force: true }); await fs.rm(path.join(repo, newPath), { force: true }); }
+  });
+  await t.test('Map structure operations cannot move a local chapter into hidden or inherited resource scope', async () => {
+    const disk = await fs.readFile(path.join(repo, 'main.ditamap'), 'utf8');
+    for (const content of [
+      '<map><topicref scope="external" href="https://example.invalid/manual"/><topicref href="topics/a.dita"/></map>',
+      '<map><topichead processing-role="resource-only"/><topicref href="topics/a.dita"/></map>'
+    ]) {
+      const response = await request('/api/map/operation', 'POST', { path: 'main.ditamap', content, sourcePath: '1', operation: 'demote' });
+      assert.equal(response.status, 409);
+    }
+    const content = '<map><topichead navtitle="Local"/><topicref scope="external" href="https://example.invalid/manual"/><topicref href="topics/a.dita"/></map>';
+    const response = await request('/api/map/operation', 'POST', { path: 'main.ditamap', content, sourcePath: '2', operation: 'demote' });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.selectedSourcePath, '0.0'); assert.equal(result.map.children[0].children[0].path, 'topics/a.dita');
+    assert.equal(await fs.readFile(path.join(repo, 'main.ditamap'), 'utf8'), disk);
+  });
   await t.test('missing Map targets never resolve to archived same-name Topics', async () => {
     const archive = path.join(repo, 'topics/archive'); await fs.mkdir(archive);
     await fs.writeFile(path.join(archive, 'missing.dita'), '<topic><title>Wrong version</title></topic>');
