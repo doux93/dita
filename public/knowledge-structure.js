@@ -45,7 +45,7 @@
       const notes = [...new Map([...notesFor(node), ...noteNodes.flatMap(notesFor)].map(note => [note.id, note])).values()], values = { kind, section: section.filter(Boolean), context: context.filter(Boolean), text: content, notes };
       const signature = fingerprint(values), duplicate = occurrences.get(signature) || 0; occurrences.set(signature, duplicate + 1);
       const id = 'b-' + signature + (duplicate ? '-' + duplicate : '');
-      const sourceAnchor = node.attrs?.id || (chapterAnchor ? chapterAnchor + '--' + id : '');
+      const sourceAnchor = node.attrs?.id || (chapterAnchor && node.origin?.setAttribute ? chapterAnchor + '--' + id : chapterAnchor);
       // This marker only enriches the sealed published DOM. Source DITA is untouched.
       if (sourceAnchor && node.origin?.setAttribute) { node.origin.setAttribute('id', sourceAnchor); node.origin.setAttribute('data-kb-block', id); }
       units.push({ id, ...values, sourceAnchor, fingerprint: signature });
@@ -105,7 +105,7 @@
             const prefix = children.slice(0, parameters[0]), shared = prose(clean({ children: prefix }));
             if (shared) walk({ children: prefix }, context, 'table-row', attached);
             parameters.forEach((start, i) => {
-              const definition = children[start], group = { ...cell, attrs: {}, origin: definition.origin, children: children.slice(start, parameters[i + 1] ?? children.length) };
+              const definition = children[start], group = { ...cell, attrs: definition.attrs || {}, origin: definition.origin, children: children.slice(start, parameters[i + 1] ?? children.length) };
               // Enumeration lists and examples belong to their parameter, not to
               // an isolated zero/one value. Repeat the definition on long splits.
               parameter = { text: prose(clean(definition)), node: group };

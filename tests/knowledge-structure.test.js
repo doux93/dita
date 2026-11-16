@@ -101,3 +101,10 @@ test('actual DITA dlentry wrappers and enumeration in the following table row ke
   const standalone = extract('<dl><div><dt>name</dt><dd>完整解释</dd></div></dl>');
   assert.ok(standalone.units.some(unit => unit.text.includes('name') && unit.text.includes('完整解释')));
 });
+
+
+test('named parameter anchors remain valid and unmarked legacy fragments fall back to the chapter', () => {
+  const result = extract('<table><tr><td colspan="2"><p id="original-parameter"><code>&lt;timeout&gt;</code>超时参数。</p><dl><dt>0</dt><dd>不超时</dd></dl></td></tr></table>');
+  assert.equal(result.units[0].sourceAnchor, 'original-parameter');
+  assert.equal(extract('<p>普通说明</p>').units[0].sourceAnchor, 'topic');
+});
