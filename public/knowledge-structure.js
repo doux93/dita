@@ -26,7 +26,7 @@
     if (node.name === 'br') return '\n';
     if (node.name === 'img') return node.attrs?.alt || '';
     const value = (node.children || []).map(child => text(child, raw || node.name === 'pre')).join('');
-    return !raw && /^(p|div|li|pre|h[2-6])$/.test(node.name) ? '\n' + value.trim() + '\n' : value;
+    return !raw && /^(p|div|li|pre|dl|dt|dd|tr|td|th|h[2-6])$/.test(node.name) ? '\n' + value.trim() + '\n' : value;
   }
   const clean = node => text(node).replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   function definitions(node) {
@@ -59,7 +59,7 @@
         (current.children || []).forEach(child => collect(child, head || current.name === 'thead'));
       }
       collect(node);
-      let spans = [], headers = [], headerNodes = [], labelNodes = [], caption = '', captionNodes = [], labels = [...inherited];
+      let spans = [], headers = [], headerNodes = [], labelNodes = [], caption = '', captionNodes = [], parameter = null, labels = [...inherited];
       const headerWord = /^(?:参数(?:名)?|名称|类型|说明|描述|取值|范围|默认值|单位|语法|响应|错误码|含义|值|结果|parameter|description|syntax|response|value|default|type|code|meaning|name|range|unit)$/i;
       for (const row of rows) {
         const grid = [], next = [];
@@ -75,7 +75,7 @@
         spans = next;
         const cells = [...new Set(grid.filter(Boolean))], values = cells.map(cell => prose(clean(cell)));
         if (row.head || cells.length > 1 && cells.every(cell => cell.name === 'th') || cells.length > 1 && values.every(value => headerWord.test(value))) {
-          headerNodes.push(...cells);
+          parameter = null; headerNodes.push(...cells);
           headers = grid.map((cell, i) => [...new Set([headers[i], cell && prose(clean(cell))].filter(Boolean))].join(' / ')); continue;
         }
         if (cells.length === 1) {
@@ -83,17 +83,46 @@
           const heading = /^(?:AT\+[\w+.-]+|命令描述|参数描述|语法|响应|示例|注意事项|command description|parameters?|syntax|responses?|examples?)$/i.test(value);
           if (heading) {
             if (/^AT\+/i.test(value)) { caption = value; captionNodes = [row.node]; }
-            labels = [...inherited, caption, value === caption ? '' : value].filter(Boolean); labelNodes = [...captionNodes, row.node]; headers = []; headerNodes = []; add(row.node, 'heading', value, inherited, inheritedNotes); continue;
+            parameter = null; labels = [...inherited, caption, value === caption ? '' : value].filter(Boolean); labelNodes = [...captionNodes, row.node]; headers = []; headerNodes = []; add(row.node, 'heading', value, inherited, inheritedNotes); continue;
           }
           // A full-width DITA cell often contains all parameter definitions as p/dl.
-          const blocks = (cell.children || []).filter(child => ['p', 'pre', 'div', 'dl', 'ul', 'ol'].includes(child.name));
-          if (blocks.length) { walk(cell, [...labels, ...headers.filter(Boolean)], 'table-row', [...inheritedNotes, ...headerNodes, ...labelNodes]); continue; }
+          const parameterName = /^<[a-z_][a-z0-9_]*>/i.test(value);
+          const enumeration = descendants(cell, child => ['dl', 'ul', 'ol', 'pre'].includes(child.name)).length > 0;
+          if (!parameterName && enumeration && parameter) {
+            add(cell, 'table-row', clean(cell), [...labels, '参数定义：' + parameter.text], [...inheritedNotes, ...headerNodes, ...labelNodes, parameter.node]); continue;
+          }
+          if (parameterName) {
+            const first = descendants(cell, child => child.name === 'p')[0], children = cell.children || [];
+            const boundary = children.findIndex(child => ['dl', 'ul', 'ol', 'pre'].includes(child.name));
+            const definition = first && /^<[a-z_][a-z0-9_]*>/i.test(prose(clean(first))) ? prose(clean(first)) : prose(clean({ children: children.slice(0, boundary < 0 ? children.length : boundary) }));
+            parameter = { text: definition, node: cell };
+            if (!descendants(cell, child => child.name === 'p').length) { add(cell, 'table-row', clean(cell), [...labels, '参数定义：' + definition], [...inheritedNotes, ...headerNodes, ...labelNodes]); continue; }
+          } else parameter = null;
+          const children = cell.children || [], intro = child => child.name === 'p' && /^<[a-z_][a-z0-9_]*>/i.test(prose(clean(child)));
+          const parameters = children.map((child, i) => intro(child) ? i : -1).filter(i => i >= 0);
+          const context = [...labels, ...headers.filter(Boolean)], attached = [...inheritedNotes, ...headerNodes, ...labelNodes];
+          if (parameters.length) {
+            const prefix = children.slice(0, parameters[0]), shared = prose(clean({ children: prefix }));
+            if (shared) walk({ children: prefix }, context, 'table-row', attached);
+            parameters.forEach((start, i) => {
+              const definition = children[start], group = { ...cell, attrs: {}, origin: definition.origin, children: children.slice(start, parameters[i + 1] ?? children.length) };
+              // Enumeration lists and examples belong to their parameter, not to
+              // an isolated zero/one value. Repeat the definition on long splits.
+              parameter = { text: prose(clean(definition)), node: group };
+              add(group, 'table-row', clean(group), [...context, ...(shared ? ['共同说明：' + shared] : []), '参数定义：' + prose(clean(definition))], [...attached, { children: prefix }]);
+            });
+            continue;
+          }
+          const blocks = children.filter(child => ['p', 'pre', 'div', 'dl', 'ul', 'ol'].includes(child.name));
+          if (blocks.length) { walk(cell, context, 'table-row', attached); continue; }
         }
         const lines = [], seen = new Set();
         for (const [i, cell] of grid.entries()) if (cell && !seen.has(cell)) { seen.add(cell); const value = clean(cell); if (value) lines.push((headers[i] ? headers[i] + '：' : '') + value); }
         const notes = cells.flatMap(notesFor), synthetic = { ...row.node, children: cells };
         // Inherited rowspan content contributes both its label and any referenced note.
-        add(synthetic, 'table-row', lines.join('\n'), labels, [...inheritedNotes, ...headerNodes, ...labelNodes]);
+        const key = cells[0] && prose(clean(cells[0]));
+        const rowContext = key && key.length <= 160 && cells.length > 1 ? [...labels, '行标识：' + key] : labels;
+        add(synthetic, 'table-row', lines.join('\n'), rowContext, [...inheritedNotes, ...headerNodes, ...labelNodes]);
         if (notes.length && !units.at(-1)?.notes.length) throw Error('表格注脚关联失败');
       }
     }
@@ -104,7 +133,7 @@
       if (node.name === 'pre') { add(node, 'code', text(node, true).replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, ''), context, noteNodes); return; }
       if (node.name === 'dl') {
         let term;
-        for (const child of node.children || []) { if (child.name === 'dt') term = child; else if (child.name === 'dd') add({ ...child, children: [term, child].filter(Boolean) }, inheritedKind || 'definition', [term && clean(term), clean(child)].filter(Boolean).join('\n'), context, noteNodes); }
+        for (const child of descendants(node, current => current.name === 'dt' || current.name === 'dd', current => current !== node && current.name === 'dl')) { if (child.name === 'dt') term = child; else if (child.name === 'dd') add({ ...child, children: [term, child].filter(Boolean) }, inheritedKind || 'definition', [term && clean(term), clean(child)].filter(Boolean).join('\n'), context, noteNodes); }
         return;
       }
       if (node.name === 'ol' || node.name === 'ul') {

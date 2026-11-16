@@ -87,6 +87,8 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     const manifest = JSON.parse(strFromU8(archive['docs/manifest.json']));
     assert.equal(manifest.semantic.profile.id, 'bge-small-zh-int8-cls-v3');
     assert.ok(book.manuals.every(manual => manual.entries.every(entry => entry.structure?.units.length)));
+    const configuration = book.manuals[0].entries.find(entry => entry.title.includes('AT+MHTTPCFG'));
+    assert.ok(configuration.structure.units.some(unit => unit.text.includes('非缓存模式') && unit.context.some(value => value.includes('<cached>'))), 'real DITA enumeration must retain its parameter definition');
     if (process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT) { await fs.mkdir(process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT, { recursive: true }); await fs.writeFile(path.join(process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT, 'HTTP-structured-knowledge.zip'), result.bytes); }
     await page.uncheck('#knowledgeSemantic'); await page.click('#knowledgeClose');
   });

@@ -22,11 +22,11 @@ test('merged table rows preserve column labels, inherited row context and only r
   assert.doesNotMatch(JSON.stringify(result), /UNREFERENCED_NOTE/);
 });
 test('full-width parameter cells keep each definition together and code keeps whitespace', () => {
-  const result = extract('<table><tr><td colspan="2">参数描述</td></tr><tr><td colspan="2">公共说明<p><code>&lt;timeout&gt;</code>整数，单位秒。</p><p><code>&lt;ssl_id&gt;</code>证书编号。</p><pre>AT+TEST=1\n  OK\n  +TEST: 1</pre></td></tr></table>');
+  const result = extract('<table><tr><td colspan="2">参数描述</td></tr><tr><td colspan="2">公共说明<p><code>&lt;timeout&gt;</code>整数，单位秒。</p><p><code>&lt;ssl_id&gt;</code>证书编号。</p></td></tr></table><pre>AT+TEST=1\n  OK\n  +TEST: 1</pre>');
   assert.ok(result.units.some(unit => unit.text === '公共说明'));
   assert.ok(result.units.some(unit => unit.text === '<timeout>整数，单位秒。'));
   const code = result.units.find(unit => unit.kind === 'code'); assert.equal(code.text, 'AT+TEST=1\n  OK\n  +TEST: 1');
-  assert.ok(code.context.includes('参数描述'));
+  assert.ok(result.units.find(unit => unit.text === '<timeout>整数，单位秒。').context.includes('参数描述'));
 });
 test('content identities survive unrelated insertions and nested sections do not create sparse paths', () => {
   const original = extract('<h4>参数说明</h4><p>timeout 的解释</p>'), updated = extract('<p>新增前言</p><h4>参数说明</h4><p>timeout 的解释</p>');
@@ -69,4 +69,35 @@ test('section context ends with its container and code indentation survives extr
   const result = extract('<section><h3>前置条件</h3><p>条件说明。</p></section><p>正文介绍。</p><pre>    first_line\n        second_line</pre>');
   assert.deepEqual(result.units.find(unit => unit.text === '正文介绍。').section, []);
   assert.equal(result.units.find(unit => unit.kind === 'code').text, '    first_line\n        second_line');
+});
+
+
+test('parameter enumeration values and examples remain coupled with their definition on long splits', async () => {
+  const result = extract('<table><tr><td colspan="2">参数描述</td></tr><tr><td colspan="2"><p><code>&lt;cached&gt;</code>缓存模式，默认值0。</p><dl><dt>0</dt><dd>非缓存模式</dd><dt>1</dt><dd>缓存模式</dd></dl><pre>AT+TEST=1\nOK</pre></td></tr></table>');
+  const parameter = result.units.find(unit => unit.kind === 'table-row');
+  assert.match(parameter.text, /<cached>缓存模式/); assert.match(parameter.text, /0\s+非缓存模式/); assert.match(parameter.text, /AT\+TEST=1\nOK/);
+  assert.ok(parameter.context.some(value => value.includes('默认值0')));
+  const entry = record(result), chunks = await semantic.chunksFor([entry], count);
+  assert.equal(chunks.filter(chunk => chunk.kind === 'table-row').length, 1);
+});
+
+
+test('split parameter rows repeat their identifier and required default instead of losing them in continuation chunks', async () => {
+  const simple = extract('<table><tr><th>参数</th><th>说明</th></tr><tr><td>timeout</td><td>' + '长参数说明。'.repeat(150) + '</td></tr></table>');
+  const simpleChunks = await semantic.chunksFor([record(simple)], count);
+  assert.ok(simpleChunks.length > 1); assert.ok(simpleChunks.every(chunk => chunk.text.includes('行标识：timeout')));
+  const wide = extract('<table><tr><td colspan="2"><p><code>&lt;cached&gt;</code>缓存模式，默认值0。</p><dl><dt>0</dt><dd>非缓存模式</dd></dl><p>' + '说明内容。'.repeat(180) + '</p></td></tr></table>');
+  const wideChunks = await semantic.chunksFor([record(wide)], count);
+  assert.ok(wideChunks.length > 1); assert.ok(wideChunks.every(chunk => chunk.text.includes('参数定义：<cached>缓存模式，默认值0。')));
+});
+
+
+test('actual DITA dlentry wrappers and enumeration in the following table row keep the owning parameter', () => {
+  const result = extract('<table><tr><td colspan="2">参数描述</td></tr><tr><td colspan="2"><code>&lt;cached&gt;</code>缓存模式，默认值0。</td></tr><tr><td colspan="2"><dl><div><dt>0</dt><dd>非缓存模式</dd></div><div><dt>1</dt><dd>缓存模式</dd></div></dl></td></tr><tr><td colspan="2"><code>&lt;timeout&gt;</code>超时时间。</td></tr><tr><td colspan="2"><dl><div><dt>0</dt><dd>无限等待</dd></div></dl></td></tr></table>');
+  const cached = result.units.find(unit => unit.text.includes('非缓存模式'));
+  assert.ok(cached); assert.ok(cached.context.some(value => value.includes('<cached>') && value.includes('默认值0')));
+  const timeout = result.units.find(unit => unit.text.includes('无限等待')); assert.ok(timeout.context.some(value => value.includes('<timeout>')));
+  assert.ok(!timeout.context.some(value => value.includes('<cached>')));
+  const standalone = extract('<dl><div><dt>name</dt><dd>完整解释</dd></div></dl>');
+  assert.ok(standalone.units.some(unit => unit.text.includes('name') && unit.text.includes('完整解释')));
 });
