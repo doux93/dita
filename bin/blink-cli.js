@@ -24,7 +24,7 @@ function defaultKnowledgePath() {
 
 function parseArgs(args) {
   const options = { query: [], json: false, limit: 10, merge: [] };
-  const values = new Set(['--kb', '--limit', '--manual', '--module', '--mode', '--get', '--search', '--build-index']);
+  const values = new Set(['--kb', '--limit', '--manual', '--module', '--mode', '--get', '--search', '--build-index', '--chunking']);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--merge') {
@@ -46,6 +46,7 @@ function parseArgs(args) {
     options.limit = Number(options.limit);
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 50) throw new Error('--limit 必须是 1～50 的整数');
   }
+  if (options.chunking && (!options['build-index'] || !['structure', 'legacy'].includes(options.chunking))) throw Error('--chunking 仅用于 --build-index，可选 structure 或 legacy');
   if (options.search && !['auto', 'lexical', 'hybrid', 'semantic'].includes(options.search)) throw Error('--search 须为 auto、lexical、hybrid 或 semantic');
   if ([options.list, options.info, Boolean(options.get), Boolean(options['build-index'])].filter(Boolean).length > 1) throw new Error('管理命令不能同时使用');
   if ((options.list || options.info || options.get || options['build-index']) && options.query.length) throw new Error('管理命令不能同时带搜索问题');
@@ -106,6 +107,7 @@ async function main() {
       '  --get <引用>      读取完整章节，引用格式为 manualId#anchor',
       '  --search <方式>   auto（默认）、lexical、hybrid、semantic；后两项需要离线模型与语义索引',
       '  --build-index <文件.json>  为发布内容生成离线语义索引，写入新 JSON 文件',
+      '  --chunking <方式> structure（默认）或 legacy；生成索引时用于新旧分片对照',
       '  --merge <路径>    加入其它手册包，可重复指定；产品型号和 SDK 版本须一致',
       '',
       '知识库路径优先级：--kb、BLINK_KB 环境变量、当前目录下 docs/knowledge.json、docs/index.html，或唯一的 *knowledge*.zip。'
@@ -118,7 +120,7 @@ async function main() {
     if (!selectedPath) throw new Error('没有找到知识库。请使用 --kb 指定 ZIP/目录，或设置 BLINK_KB 环境变量。');
     const knowledgePath = path.resolve(selectedPath);
     const knowledgePaths = [knowledgePath, ...options.merge.map(name => path.resolve(name))];
-    const books = knowledgePaths.map(bookFromPath);
+    const books = knowledgePaths.map(name => bookFromPath(name, { structured: !!options['build-index'] && options.chunking !== 'legacy' }));
     const outdated = books.some(value => value.semantic && !semanticData.compatible(value.semantic));
     const ignoreSemantic = !!options['build-index'] || options.search === 'lexical' || outdated;
     const book = books.length === 1 ? books[0] : mergeBooks(books, { ignoreSemantic });
@@ -128,12 +130,20 @@ async function main() {
       const target = path.resolve(options['build-index']);
       if (!target.endsWith('.json')) throw Error('语义知识库请使用 .json 文件名');
       if (fs.existsSync(target)) throw Error('输出文件已存在，请使用新的文件名：' + target);
-      const index = semanticData.compatible(book.semantic) ? book.semantic : await semantic.build(records, (done, total) => process.stderr.write('正在离线向量化 ' + done + '/' + total + '\n'));
+      const legacy = options.chunking === 'legacy', profile = legacy ? semanticData.LEGACY_PROFILE : semanticData.PROFILE;
+      let reusable = semanticData.compatible(book.semantic) && book.semantic.profile.id === profile.id;
+      if (reusable) {
+        try { semanticData.validate(records, book.semantic); }
+        catch (cause) { reusable = false; process.stderr.write('现有索引需要重建：' + cause.message + '\n'); }
+      }
+      const structuredChapters = records.filter(record => record.structure).length;
+      if (!legacy && structuredChapters < records.length) process.stderr.write((records.length - structuredChapters) + ' 个章节只有纯文本，将使用长度分片；从工作台重新核对发布可保留结构。\n');
+      const index = reusable ? book.semantic : await semantic.build(records, (done, total) => process.stderr.write('正在离线向量化 ' + done + '/' + total + '\n'), { legacy });
       semanticData.validate(records, index);
       const output = { ...book, index: undefined, semantic: index,
         manuals: book.manuals.map(({ body: _body, toc: _toc, ...manual }) => manual) };
       fs.writeFileSync(target, JSON.stringify(output), { flag: 'wx' });
-      if (options.json) outputJson({ schema: 1, path: target, model: book.model, profile: index.profile.id, chunks: index.chunks.length });
+      if (options.json) outputJson({ schema: 1, path: target, model: book.model, profile: index.profile.id, chunks: index.chunks.length, structuredChapters, fallbackChapters: records.length - structuredChapters });
       else process.stdout.write('已生成离线语义知识库：' + target + '\n');
       return;
     }
@@ -192,7 +202,7 @@ async function main() {
     if (searchMode !== 'lexical' && outdated) throw Error('语义索引编码配置已更新，请使用 --build-index 重新生成');
     const lexical = engine.search(records, ensureSearchIndex(), query, manual?.id || '', 50, filters);
     // Exact command names and error codes retain their existing hard constraints.
-    const exactLookup = /^(?:at\+[a-z0-9_]+|[a-z_][a-z0-9_]*_[a-z0-9_]*|-?\d+)$/i.test(query) || /(?:错误|状态码|返回值|结果码|返回).*\d|\d.*(?:错误|状态码)/i.test(query);
+    const exactLookup = semantic.requiresLexical(query);
     let hits = lexical.slice(0, options.limit);
     if (searchMode !== 'lexical' && !exactLookup) {
       if (!book.semantic) throw Error('此知识库尚无语义索引，请在工作台勾选离线语义索引后重新发布，或由发布人员使用 --build-index 生成');

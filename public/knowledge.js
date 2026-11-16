@@ -7,6 +7,7 @@
     const workspaceKey = () => JSON.stringify([A.state.root, A.state.currentBranch || '']);
     const sourceKey = (root, path) => JSON.stringify([root, path]);
     const error = text => { get('knowledgeError').textContent = text; }, status = text => { get('knowledgeStatus').textContent = text; };
+    const chunkPreview = root.DitaKnowledgeChunkPreview.createController({ A, parts: readyParts, error });
     const validModel = model => /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(model);
     const sameQuickSettings = (left, right) => ['filterPath', 'prefixes', 'version', 'mode', 'module'].every(field => left[field] === right[field]);
     function invalidate() { compiled = null; }
@@ -49,7 +50,7 @@
       get('knowledgeBatchCheck').disabled = busy || loading || !recipes.size; get('knowledgeBatchRetry').disabled = busy || loading || ![...recipes.keys()].some(key => !parts.has(key)); get('knowledgeBatchCancel').hidden = !busy;
       get('knowledgeModel').disabled = busy || recipes.size > 0;
       const ready = recipes.size > 0 && readyParts().every(part => part && !part.staleMetadata.length);
-      get('knowledgePreview').disabled = busy || !ready; get('knowledgeDownload').disabled = busy || !ready; get('knowledgeClear').disabled = busy || !recipes.size;
+      get('knowledgePreview').disabled = busy || !ready; get('knowledgeChunkPreview').disabled = busy || !ready; get('knowledgeDownload').disabled = busy || !ready; get('knowledgeClear').disabled = busy || !recipes.size;
       for (const input of get('knowledgeSources').querySelectorAll('input')) input.disabled = busy || loading;
       for (const button of get('knowledgeCollection').querySelectorAll('button')) button.disabled = busy;
     }
@@ -264,6 +265,7 @@
     get('knowledgeBatchCancel').addEventListener('click', () => { cancel(); renderCollection(); status('已取消核对，未完成来源需重新核对后发布。'); });
     get('knowledgeButton').addEventListener('click', show); get('knowledgeAdd').addEventListener('click', add);
     get('knowledgeClose').addEventListener('click', () => { cancel(); get('knowledgeDialog').close(); }); get('knowledgeDialog').addEventListener('cancel', cancel);
+    get('knowledgeChunkPreview').addEventListener('click', () => chunkPreview.show());
     get('knowledgePreview').addEventListener('click', preview); get('knowledgeDownload').addEventListener('click', download);
     get('knowledgePreviewClose').addEventListener('click', () => get('knowledgePreviewDialog').close());
     get('knowledgePreviewDialog').addEventListener('close', () => { get('knowledgePreviewFrame').srcdoc = ''; });
@@ -271,7 +273,7 @@
     for (const id of ['knowledgeTitle', 'knowledgeSdk']) get(id).addEventListener('input', invalidate);
     for (const id of ['knowledgeVersion', 'knowledgePrefixes', 'knowledgeMode', 'knowledgeModule']) get(id).addEventListener('change', remember);
     get('knowledgeFilter').addEventListener('change', () => { if (busy || loading || !get('knowledgeFilter').options.length || get('knowledgeFilter').selectedOptions[0]?.disabled) return; filterFailed = false; remember(); controls(); error(''); });
-    A.events.on('workspace:willChange', () => { cancel(); get('knowledgeMetadataDialog').close(); get('knowledgePreviewDialog').close(); get('knowledgeDialog').close(); });
+    A.events.on('workspace:willChange', () => { cancel(); chunkPreview.close(); get('knowledgeMetadataDialog').close(); get('knowledgePreviewDialog').close(); get('knowledgeDialog').close(); });
     return { show, get lastManifest() { return compiled?.manifest || null; } };
   }
   root.DitaKnowledge = { createController };

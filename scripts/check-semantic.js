@@ -13,12 +13,12 @@ async function main() {
   const book = { schema: 1, title: '离线验证手册', model: 'TEST', sdkVersion: 'v1', generatedAt: new Date().toISOString(),
     manuals: [{ id: 'm-0123456789abcdef', title: '开发指导手册', mode: 'OC', module: '调试', version: 'v1',
       source: { repository: 'smoke', commit: null, dirty: false },
-      entries: [{ anchor: 'log', title: '日志抓取方法', text: '使用串口工具抓取模组日志，选择调试串口，保存日志文件。' }] }] };
+      entries: [{ anchor: 'log', title: '日志抓取方法', text: '日志抓取方法 使用串口工具抓取模组日志，选择调试串口，保存日志文件。' }] }] };
   const records = flatten(book); book.semantic = await build(records);
   const hits = await search(records, book.semantic, '日志抓取方法', [], { semanticOnly: true });
   assert.equal(hits[0]?.position, 0);
   await fs.mkdir(path.dirname(destination), { recursive: true }); await fs.writeFile(destination, JSON.stringify(book));
-  const manual = book.manuals[0], html = '<!doctype html><html><body><h2 id="log">日志抓取方法</h2><p>' + manual.entries[0].text + '</p></body></html>';
+  const manual = book.manuals[0], html = '<!doctype html><html><body><h2 id="log">日志抓取方法</h2>\n<p>' + manual.entries[0].text.replace(/^日志抓取方法 /, '') + '</p></body></html>';
   const output = buildPackage({ title: book.title, model: book.model, sdkVersion: book.sdkVersion,
     manuals: [{ ...manual, model: book.model, html, body: html, toc: [{ title: '日志抓取方法', anchor: 'log' }], report: { included: 0 } }] });
   await fs.writeFile(destination.replace(/\.json$/, '.zip'), new Uint8Array(await output.zip.arrayBuffer()));

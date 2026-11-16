@@ -49,6 +49,34 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     assert.equal(await frame.locator('#kbArticle .export-footnotes > ol > li').count(), 25);
     await page.click('#knowledgePreviewClose'); await page.click('#knowledgeClose');
   });
+  if (process.env.BLINK_MODELS) await stage('structured chunk preview preserves parameter notes, source positioning and the legacy comparison', async () => {
+    await page.click('#knowledgeButton'); await page.click('#knowledgeChunkPreview');
+    const choice = await page.locator('#knowledgeChunksEntry option').evaluateAll(options => options.find(option => option.textContent.includes('AT+MHTTPCFG'))?.value);
+    assert.ok(choice); await page.selectOption('#knowledgeChunksEntry', choice);
+    await page.locator('#knowledgeChunksGenerate:not([disabled])').waitFor({ timeout: 60000 });
+    assert.match(await page.locator('#knowledgeChunksSummary').innerText(), /结构块/);
+    assert.ok(await page.locator('.knowledge-chunk').count() > 5);
+    const values = await page.locator('.knowledge-chunk-heading>span').allTextContents(); assert.ok(values.every(value => parseInt(value) <= 512));
+    const noted = page.locator('.knowledge-chunk').filter({ has: page.locator('.knowledge-chunk-footer>span').filter({ hasText: /^[1-9]/ }) }).first();
+    await noted.locator('button').click();
+    const source = page.frameLocator('#knowledgeChunksSource'); await source.locator('[data-chunk-active]').waitFor();
+    assert.ok((await noted.locator('pre').innerText()).includes('注脚：'));
+    if (process.env.DITA_STRUCTURE_SCREENSHOT) await page.screenshot({ path: process.env.DITA_STRUCTURE_SCREENSHOT, fullPage: true });
+    await page.selectOption('#knowledgeChunksStrategy', 'legacy'); await page.locator('#knowledgeChunksGenerate:not([disabled])').waitFor({ timeout: 60000 });
+    assert.match(await page.locator('#knowledgeChunksSummary').innerText(), /旧版长度分片/);
+    await page.selectOption('#knowledgeChunksStrategy', 'structure'); await page.locator('#knowledgeChunksGenerate:not([disabled])').waitFor({ timeout: 60000 });
+    await page.setViewportSize({ width: 620, height: 850 });
+    assert.ok(await page.locator('#knowledgeChunksDialog').evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    await page.setViewportSize({ width: 1440, height: 1020 });
+    const endpoint = '**/api/knowledge/chunks'; let release;
+    const hold = new Promise(resolve => { release = resolve; });
+    await page.route(endpoint, async route => { await hold; await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'LATE_PREVIEW_ERROR' }) }).catch(() => {}); });
+    const pending = page.waitForRequest(request => request.url().endsWith('/api/knowledge/chunks'));
+    await page.click('#knowledgeChunksGenerate'); await pending; await page.click('#knowledgeChunksClose'); release(); await page.unroute(endpoint);
+    await page.click('#knowledgeChunkPreview'); await page.locator('#knowledgeChunksGenerate:not([disabled])').waitFor({ timeout: 60000 });
+    assert.doesNotMatch(await page.locator('#knowledgeChunksSummary').innerText(), /LATE_PREVIEW_ERROR/);
+    await page.click('#knowledgeChunksClose'); await page.click('#knowledgeClose');
+  });
   if (process.env.BLINK_MODELS) await stage('the normal export entry produces a content-bound offline semantic index', async () => {
     await page.click('#knowledgeButton'); await page.check('#knowledgeSemantic');
     const result = await download(), archive = unzipSync(new Uint8Array(result.bytes));
@@ -57,7 +85,9 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     assert.ok(book.semantic.chunks.length > 24);
     assert.equal(validate(flatten(book), book.semantic).length, book.semantic.chunks.length * 512);
     const manifest = JSON.parse(strFromU8(archive['docs/manifest.json']));
-    assert.equal(manifest.semantic.profile.id, 'bge-small-zh-int8-cls-v2');
+    assert.equal(manifest.semantic.profile.id, 'bge-small-zh-int8-cls-v3');
+    assert.ok(book.manuals.every(manual => manual.entries.every(entry => entry.structure?.units.length)));
+    if (process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT) { await fs.mkdir(process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT, { recursive: true }); await fs.writeFile(path.join(process.env.DITA_STRUCTURE_ACCEPTANCE_OUTPUT, 'HTTP-structured-knowledge.zip'), result.bytes); }
     await page.uncheck('#knowledgeSemantic'); await page.click('#knowledgeClose');
   });
   await stage('switching repositories preserves the first snapshot, namespaces same-path Topics and excludes other models from the index', async () => {
