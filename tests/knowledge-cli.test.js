@@ -26,9 +26,9 @@ function fixture() {
   });
 }
 
-function run(args, cwd) {
+function run(args, cwd, env = {}) {
   return spawnSync(process.execPath, [path.resolve(__dirname, '../bin/blink-cli.js'), ...args], {
-    cwd, encoding: 'utf8', env: { ...process.env, BLINK_KB: '' }
+    cwd, encoding: 'utf8', env: { ...process.env, BLINK_KB: '', ...env }
   });
 }
 
@@ -225,4 +225,27 @@ test('structural recovery from a legacy ZIP is bound to its published HTML and m
   const mismatch = path.join(dir, 'mismatch.zip'); fs.writeFileSync(mismatch, Buffer.from(await bad.arrayBuffer()));
   assert.throws(() => require('../lib/knowledge-book').bookFromPath(mismatch, { structured: true }), /正文不一致/);
   assert.equal(require('../lib/knowledge-book').bookFromPath(mismatch).manuals[0].entries[0].text, cli.manuals[0].entries[0].text);
+});
+
+if (process.env.BLINK_MODELS) test('CLI reuses manual caches across processes and combines embedded packs without a model', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blink-cache-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source.json'), first = path.join(dir, 'first.json'), next = path.join(dir, 'next.json');
+  const current = structuredClone(fixture().book); fs.writeFileSync(source, JSON.stringify(current));
+  const env = { DITA_SEMANTIC_CACHE_DIR: path.join(dir, 'cache') };
+  let result = run(['--kb', source, '--build-index', first, '--json'], dir, env); assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).rebuiltManuals, 1);
+  current.sdkVersion = 'V2'; current.manuals[0].source.commit = 'fresh-commit'; current.manuals[0].entries[0].aliases = ['新别名']; fs.writeFileSync(source, JSON.stringify(current));
+  result = run(['--kb', source, '--build-index', next, '--json'], dir, { ...env, BLINK_MODELS: path.join(dir, 'missing-model') });
+  assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).reusedManuals, 1);
+  const output = JSON.parse(fs.readFileSync(next)); assert.equal(output.sdkVersion, 'V2'); assert.equal(output.manuals[0].source.commit, 'fresh-commit');
+  assert.deepEqual(output.manuals[0].entries[0].aliases, ['新别名']);
+  const packB = structuredClone(output); packB.manuals[0].id += 'b';
+  const data = require('../public/knowledge-semantic'); packB.semantic.chunks = packB.semantic.chunks.map(chunk => ({ ...chunk, manualId: packB.manuals[0].id }));
+  data.validate(require('../lib/knowledge-book').flatten(packB), packB.semantic);
+  const b = path.join(dir, 'b.json'), merged = path.join(dir, 'merged.json'); fs.writeFileSync(b, JSON.stringify(packB));
+  result = run(['--kb', next, '--merge', b, '--build-index', merged, '--json'], dir, { DITA_SEMANTIC_CACHE_DIR: path.join(dir, 'new-cache'), BLINK_MODELS: path.join(dir, 'missing-model') });
+  assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).reusedManuals, 2); assert.equal(JSON.parse(result.stdout).rebuiltManuals, 0);
+  result = run(['--kb', source, '--build-index', path.join(dir, 'force.json'), '--rebuild', '--json'], dir, env);
+  assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).rebuiltManuals, 1);
+  assert.equal(run(['--kb', source, '--rebuild', '--info'], dir, env).status, 2);
 });

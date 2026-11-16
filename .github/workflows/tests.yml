@@ -45,7 +45,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run prepare:semantic
-      - run: node --test tests/knowledge-semantic.test.js tests/knowledge-structure.test.js tests/knowledge-cli.test.js
+      - run: node --test tests/knowledge-semantic.test.js tests/knowledge-structure.test.js tests/knowledge-cli.test.js tests/knowledge-cache.test.js
         env:
           BLINK_MODELS: ./models
       - run: node scripts/check-semantic.js dist/smoke.json
@@ -66,3 +66,9 @@ jobs:
           $verified = Get-Content .\verified-structure.json -Raw | ConvertFrom-Json
           if ($verified.semantic.profile.id -ne 'bge-small-zh-int8-cls-v3') { throw 'Unexpected chunking profile' }
           if (!($verified.semantic.chunks | Where-Object { $_.kind -eq 'paragraph' })) { throw 'Published HTML structure was not recovered' }
+
+          $env:BLINK_MODELS = Join-Path $PWD 'missing-model'
+          $json = & .\blink-cli.cmd --kb .\docs\index.html --build-index .\verified-cached.json --json
+          if ($LASTEXITCODE -ne 0) { throw 'Portable manual cache reuse failed' }
+          $cached = $json | ConvertFrom-Json
+          if ($cached.reusedManuals -ne 1 -or $cached.rebuiltManuals -ne 0) { throw 'Portable cache statistics are incorrect' }

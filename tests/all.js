@@ -74,3 +74,5 @@ require('./knowledge-plan.test');
 
 require('./knowledge-sources.test');
 
+
+require('./knowledge-cache.test');

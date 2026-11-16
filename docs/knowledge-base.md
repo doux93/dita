@@ -147,3 +147,22 @@ node scripts/check-knowledge-chunks.js .\knowledge.zip http .\comparison.json
 对照脚本也支持 `mr380r` 问题集，固定问题位于 `tests/fixtures/knowledge-chunk-cases.json`。同一份发布内容、同一模型分别测旧版与结构化分片的纯语义及混合检索，记录首位、前三位与无答案误命中；输出报告使用新文件名。
 
 第一版依赖发布器保留的 HTML 结构，尚未独立实现全部 DITA 特化语义，也不分析图片像素。图片使用已发布的替代文本或说明。片段增加会增大索引并增加首次构建成本；客户侧继续共享同一份模型。默认保留混合检索，纯语义模式用于对照评测。
+
+### 按手册复用离线向量
+
+发布窗口勾选“附带离线语义索引”后，每份手册独立检查本机缓存，再组合为本次交付的 `semantic` 索引。进度显示当前手册和片段，完成后显示复用、重新生成的手册数量及总片段数。“向量复用设置”中的“本次重新生成全部向量”仅影响这一次发布，成功后自动关闭。缓存不可写或损坏时会提示，并继续从当前正文生成交付文件。
+
+复用条件包括交付型号、手册和章节标题、正文、结构块、关联注脚、定位标识、分片配置及固定模型和编码运行库版本。SDK 标签、文档版本、Git 提交、核对时间和检索别名更新本次交付元数据，不会因这些信息变化单独重新计算向量。正文或关联注脚变化时，重新生成其所在整份手册；目前没有片段级增量编码。重排、添加或移除手册会重新组合和校验索引位置，未变的手册继续复用。
+
+CLI 使用相同缓存机制，独立生成的兼容向量包也可直接组合：
+
+```sh
+blink-cli --kb ./http.zip --build-index ./http-vectors.json --json
+blink-cli --kb ./http.zip --merge ./webui.zip --build-index ./sdk-vectors.json --json
+blink-cli --kb ./http-vectors.json --merge ./webui-vectors.json --build-index ./combined.json --json
+blink-cli --kb ./http.zip --build-index ./http-rebuilt.json --rebuild
+```
+
+`--build-index` 始终写入新文件，不覆盖输入。JSON 结果增加 `reusedManuals`、`rebuiltManuals`、`totalManuals`、`totalChunks` 和 `warnings`。生成需要离线模型；命中缓存或组合完整兼容索引时不加载模型。客户执行语义搜索仍需随便携包提供的模型；本机缓存不加入客户包，也不改变原 HTML 和 DITA 文件。
+
+默认缓存位于 Windows `%LOCALAPPDATA%/dita-lite/knowledge-vectors-v1`，Linux `$XDG_CACHE_HOME/dita-lite/knowledge-vectors-v1`（未设置时为 `~/.cache/dita-lite/knowledge-vectors-v1`）。可用 `DITA_SEMANTIC_CACHE_DIR` 指定位置；删除该目录只影响后续生成速度。缓存含片段正文，应与源手册采用相同访问权限管理。单份缓存上限 64 MiB，总量默认上限 256 MiB、64 份，超限按最近使用情况清理本工具的旧条目。每份文件含完整性校验，通过临时文件原子替换保存；取消不会保存半成品。

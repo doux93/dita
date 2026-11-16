@@ -13,3 +13,5 @@ export function createIndex(chunks:readonly SemanticChunk[], vectors:readonly nu
 export function validate(records:readonly SearchRecord[], index:SemanticIndex):Float32Array;
 
 export function legacyChunksFor(records:readonly SearchRecord[], countTokens:(text:string)=>Promise<number>|number):Promise<SemanticChunk[]>;
+
+export function combineIndexes(groups:readonly (readonly SearchRecord[])[], indexes:readonly SemanticIndex[]):SemanticIndex;
