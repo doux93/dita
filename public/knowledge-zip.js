@@ -2,9 +2,25 @@
 'use strict';
 (function (root) {
   const limits = typeof module !== 'undefined' ? require('./knowledge-limits') : root.DitaKnowledgeLimits;
+  /** @param {string} text */
+  function textBytes(text) {
+    let size = 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code < 128) size++;
+      else if (code < 2048) size += 2;
+      else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length && text.charCodeAt(i + 1) >= 0xdc00 && text.charCodeAt(i + 1) <= 0xdfff) { size += 4; i++; }
+      else size += 3;
+    }
+    return size;
+  }
+  /** Exact STORE archive size, including UTF-8 names and directory headers.
+   * @param {readonly import('./knowledge-contracts').ArchiveFile[]} files */
+  function measureFiles(files) { return files.reduce((bytes, file) => bytes + (typeof file.content === 'string' ? textBytes(file.content) : file.content.byteLength) + 76 + 2 * textBytes(file.name), 22); }
   // Portable ZIP STORE writer: UTF-8 filenames, CRC32, no install/runtime needed.
-  /** @param {readonly import('./knowledge-contracts').ArchiveFile[]} files */
-  function createZip(files) {
+  /** @param {readonly import('./knowledge-contracts').ArchiveFile[]} files
+   * @param {(done:number,total:number)=>void} [onProgress] */
+  function createZip(files, onProgress = () => {}) {
     const encoder = new TextEncoder(), local = [], central = [], names = new Set();
     let offset = 0, centralSize = 0;
     const table = Uint32Array.from({ length: 256 }, (_, value) => {
@@ -20,6 +36,7 @@
     /** @param {number} size @param {number} signature */
     function header(size, signature) { const data = new Uint8Array(size); new DataView(data.buffer).setUint32(0, signature, true); return data; }
     if (!files.length || files.length > 65535) throw new Error('知识库打包文件数量无效');
+    limits.assertReadable(measureFiles(files), '知识库 ZIP');
     // Encode and account for all headers before allocating the final archive.
     const encoded = files.map(file => {
       if (!/^[a-zA-Z0-9_./-]+$/.test(file.name) || file.name.startsWith('/') || file.name.split('/').some(part => !part || part === '.' || part === '..') || names.has(file.name)) throw new Error('知识库打包路径无效或重复');
@@ -29,6 +46,7 @@
       return { name, data };
     });
     limits.assertReadable(encoded.reduce((bytes, file) => bytes + file.data.length + 76 + 2 * file.name.length, 22), '知识库 ZIP');
+    let done = 0;
     for (const { name, data } of encoded) {
       const crc = crc32(data), entry = header(30 + name.length, 0x04034b50), e = new DataView(entry.buffer);
       e.setUint16(4, 20, true); e.setUint16(6, 0x800, true); e.setUint16(12, 33, true);
@@ -38,11 +56,12 @@
       d.setUint16(4, 20, true); d.setUint16(6, 20, true); d.setUint16(8, 0x800, true); d.setUint16(14, 33, true);
       d.setUint32(16, crc, true); d.setUint32(20, data.length, true); d.setUint32(24, data.length, true); d.setUint16(28, name.length, true); d.setUint32(42, offset, true); directory.set(name, 46);
       central.push(directory); centralSize += directory.length; offset += entry.length + data.length;
+      onProgress(++done, encoded.length);
     }
     const end = header(22, 0x06054b50), view = new DataView(end.buffer);
     view.setUint16(8, files.length, true); view.setUint16(10, files.length, true); view.setUint32(12, centralSize, true); view.setUint32(16, offset, true);
     return new Blob([...local, ...central, end], { type: 'application/zip' });
   }
-  const api = { createZip };
+  const api = { createZip, textBytes, measureFiles };
   if (typeof module !== 'undefined') module.exports = api; else root.DitaKnowledgeZip = api;
 })(typeof window === 'undefined' ? globalThis : window);

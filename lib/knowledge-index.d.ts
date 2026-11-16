@@ -9,6 +9,7 @@ export interface IndexResult { readonly index:SemanticIndex; readonly stats:Inde
 export interface IndexBuilder {
   manual(manual:IndexManual, options?:IndexOptions):Promise<{readonly index:SemanticIndex;readonly source:'generated'|'cache'|'embedded';readonly warnings:readonly string[]}>;
   book(book:IndexBook, options?:IndexOptions):Promise<IndexResult>;
+  estimate(book:IndexBook, options?:IndexOptions):Promise<{readonly profile:SemanticIndex['profile'];readonly chunks:number;readonly bytes:number}>;
   recordsFor(manual:IndexManual):SearchRecord[];
 }
 export function createIndexBuilder(options?:object):IndexBuilder;
