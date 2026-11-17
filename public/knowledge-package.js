@@ -7,8 +7,9 @@
   const limits = typeof module !== 'undefined' ? require('./knowledge-limits') : root.DitaKnowledgeLimits;
   const semanticData = typeof module !== 'undefined' ? require('./knowledge-semantic') : root.DitaKnowledgeSemantic;
   /** @param {import('./knowledge-contracts').KnowledgeRequest} request
-   * @param {(progress:import('./knowledge-contracts').PublishProgress)=>void} [onProgress] */
-  function preparePackage({ title, model, sdkVersion, manuals, generatedAt = new Date().toISOString() }, onProgress = () => {}) {
+   * @param {(progress:import('./knowledge-contracts').PublishProgress)=>void} [onProgress]
+   * @param {{takeOwnership?:boolean}} [options] The Worker already owns a structured clone. */
+  function preparePackage({ title, model, sdkVersion, manuals, generatedAt = new Date().toISOString() }, onProgress = () => {}, { takeOwnership = false } = {}) {
     onProgress({ stage: 'validate' });
     title = String(title || '').trim(); model = String(model || '').trim(); sdkVersion = String(sdkVersion || '').trim();
     if (!title || title.length > 160 || !sdkVersion || sdkVersion.length > 80 || !/^[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u.test(model)) throw new Error('请填写标题、有效型号和 SDK 版本');
@@ -20,7 +21,7 @@
       ids.add(manual.id); size += zip.textBytes(manual.html) + zip.textBytes(manual.body) + zip.textBytes(JSON.stringify(manual.entries));
     }
     if (size > limits.SOURCE_BYTES) throw new Error('本版知识库内容超过 40 MB，请减少手册后重试');
-    manuals = structuredClone(manuals);
+    if (!takeOwnership) manuals = structuredClone(manuals);
     /** @template T @param {T} value @returns {T} */
     function freeze(value) {
       if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.values(value).forEach(freeze); Object.freeze(value); }
@@ -57,14 +58,18 @@
     }
     const baseline = filesFor();
     const baselineBytes = zip.measureFiles(baseline.files);
+    // Excludes the semantic JSON and the decimal chunk count in the manifest.
+    // The server adds these from its prepared chunks before starting inference.
+    function archiveOverhead() {
+      const nextManifest = { ...manifest, semantic: { profile: semanticData.PROFILE, chunks: 0 } };
+      return baselineBytes + zip.textBytes(JSON.stringify(nextManifest, null, 2)) - zip.textBytes(baseline.files[1].content) + zip.textBytes(',"semantic":') - 1;
+    }
     /** @param {{profile:import('./knowledge-semantic').SemanticIndex['profile'],chunks:number,bytes:number}} [estimate] */
     function measure(estimate) {
       let bytes = baselineBytes;
       if (estimate) {
         if (JSON.stringify(estimate.profile) !== JSON.stringify(semanticData.PROFILE) || !Number.isSafeInteger(estimate.chunks) || estimate.chunks < 0 || estimate.chunks > 12000 || !Number.isSafeInteger(estimate.bytes) || estimate.bytes < 0) throw Error('语义容量核算结果无效');
-        const nextManifest = { ...manifest, semantic: { profile: estimate.profile, chunks: estimate.chunks } };
-        bytes += zip.textBytes(JSON.stringify(nextManifest, null, 2)) - zip.textBytes(baseline.files[1].content);
-        bytes += zip.textBytes(',"semantic":') + estimate.bytes;
+        bytes = archiveOverhead() + String(estimate.chunks).length + estimate.bytes;
       }
       onProgress({ stage: 'capacity', bytes, limit: limits.ARCHIVE_BYTES });
       limits.assertReadable(bytes, '知识库 ZIP');
@@ -83,7 +88,7 @@
       const safe = (/** @type {string} */ value) => value.replace(/[^\p{L}\p{N}._-]/gu, '-');
       return { html, manifest: result.manifest, book, zip: archive, filename: safe(model) + '-SDK-' + safe(sdkVersion) + '-knowledge-base.zip' };
     }
-    return { html, book, manuals, build, measure };
+    return { html, book, manuals, build, measure, archiveOverhead };
   }
 
   /** @param {import('./knowledge-contracts').KnowledgeRequest} request */

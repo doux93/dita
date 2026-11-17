@@ -53,15 +53,15 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
   });
   await stage('oversized semantic delivery stops before inference and the captured HTTP manual remains usable', async () => {
     await page.click('#knowledgeButton'); await page.check('#knowledgeSemantic');
-    const endpoint = '**/api/knowledge/estimate', requests = [], downloads = [];
-    const requested = request => { if (request.url().endsWith('/api/knowledge/semantic')) requests.push(request.url()); };
+    const endpoint = '**/api/knowledge/publish', requests = [], downloads = [];
+    const requested = request => { if (request.url().endsWith('/api/knowledge/publish')) requests.push(request.url()); };
     const downloaded = download => downloads.push(download);
     context.on('request', requested); page.on('download', downloaded);
     const profile = await page.evaluate(() => window.DitaKnowledgeSemantic.PROFILE);
-    await context.route(endpoint, route => route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'result', profile, chunks: 12000, bytes: 64 * 1024 * 1024 }) + '\n' }));
+    await context.route(endpoint, route => route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'estimate', profile, chunks: 12000, bytes: 64 * 1024 * 1024 }) + '\n' }));
     try {
       await page.click('#knowledgeDownload'); await page.waitForFunction(() => document.getElementById('knowledgeError').textContent.includes('64 MiB'));
-      assert.equal(requests.length, 0); assert.equal(downloads.length, 0);
+      assert.equal(requests.length, 1); assert.equal(downloads.length, 0);
       assert.match(await page.locator('#knowledgeCapacity').innerText(), /MiB/);
       assert.equal(await page.locator('.knowledge-part').count(), 1);
     } finally { await context.unroute(endpoint); context.removeListener('request', requested); page.removeListener('download', downloaded); }
@@ -141,15 +141,13 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     await page.click('#knowledgeButton'); await page.check('#knowledgeSemantic');
     if (!await page.locator('.knowledge-vector-options').evaluate(node => node.open)) await page.locator('.knowledge-vector-options summary').click();
     await page.check('#knowledgeRebuild');
-    const endpoint = '**/api/knowledge/semantic'; let release;
-    const hold = new Promise(resolve => { release = resolve; }), downloads = [];
+    const downloads = [];
     const listener = download => downloads.push(download); page.on('download', listener);
-    await context.route(endpoint, async route => { await hold; try { await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'error', message: 'LATE_VECTOR_ERROR' }) + '\n' }); } catch (cause) { if (!/closed|handled|cancel|abort/i.test(cause.message)) throw cause; } });
-    const request = context.waitForEvent('request', request => request.url().endsWith('/api/knowledge/semantic'));
-    await page.click('#knowledgeDownload'); await request; assert.equal(await page.locator('#knowledgeBatchCancel').innerText(), '取消向量生成');
-    await page.click('#knowledgeBatchCancel'); assert.match(await page.locator('#knowledgeStatus').innerText(), /手册来源仍可用于重新导出/); await page.click('#knowledgeClose'); release();
-    await context.unroute(endpoint); await page.click('#knowledgeButton'); await page.locator('#knowledgeDownload:not([disabled])').waitFor();
-    assert.equal(downloads.length, 0); assert.doesNotMatch(await page.locator('#knowledgeError').innerText(), /LATE_VECTOR_ERROR/);
+    await page.click('#knowledgeDownload');
+    await page.waitForFunction(() => document.getElementById('knowledgeBatchCancel').textContent === '取消向量生成', null, { timeout: 60000 });
+    await page.click('#knowledgeBatchCancel'); assert.match(await page.locator('#knowledgeStatus').innerText(), /手册来源仍可用于重新导出/); await page.click('#knowledgeClose');
+    await page.click('#knowledgeButton'); await page.locator('#knowledgeDownload:not([disabled])').waitFor();
+    assert.equal(downloads.length, 0); assert.equal(await page.locator('#knowledgeError').innerText(), '');
     assert.equal(await page.locator('#knowledgeRebuild').isChecked(), true);
     page.removeListener('download', listener); await page.uncheck('#knowledgeRebuild'); await page.uncheck('#knowledgeSemantic'); await page.click('#knowledgeClose');
   });

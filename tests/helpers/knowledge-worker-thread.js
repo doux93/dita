@@ -6,9 +6,9 @@ const context = vm.createContext({ console, performance, TextEncoder, TextDecode
   AbortController, structuredClone, setTimeout, clearTimeout,
   fetch: async (url, options) => {
     parentPort.postMessage({ type: 'test-request', url });
-    if (workerData?.oversize && url === '/api/knowledge/estimate') {
+    if (workerData?.oversize && url === '/api/knowledge/publish') {
       const profile = require('../../public/knowledge-semantic').PROFILE;
-      return new Response(JSON.stringify({ type: 'result', profile, chunks: 12000, bytes: 64 * 1024 * 1024 }) + '\n');
+      return new Response(JSON.stringify({ type: 'estimate', profile, chunks: 12000, bytes: 64 * 1024 * 1024 }) + '\n');
     }
     if (workerData?.origin) return fetch(new URL(url, workerData.origin), options);
     throw Error('Unexpected request: ' + url);

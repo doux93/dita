@@ -24,7 +24,7 @@ self.onmessage = async ({ data }) => {
     let value;
     if (data.action === 'prepare') {
       prepared = null;
-      prepared = self.DitaKnowledgePackage.preparePackage(data.payload, progress);
+      prepared = self.DitaKnowledgePackage.preparePackage(data.payload, progress, { takeOwnership: true });
       value = { ...prepared.measure(), title: prepared.book.title, model: prepared.book.model, sdkVersion: prepared.book.sdkVersion,
         manuals: prepared.manuals.length, chapters: prepared.manuals.reduce((sum, manual) => sum + manual.entries.length, 0) };
     } else {
@@ -35,13 +35,10 @@ self.onmessage = async ({ data }) => {
         let generated;
         if (data.payload.semantic) {
           self.DitaWorkspaceClient.adopt(data.payload.token);
-          const options = { api: self.DitaWorkspaceClient, manuals: prepared.manuals, model: prepared.book.model,
+          const options = { api: self.DitaWorkspaceClient, manuals: prepared.manuals, model: prepared.book.model, archiveOverhead: prepared.archiveOverhead(),
             force: !!data.payload.force, signal: controller.signal };
           progress({ stage: 'estimate' });
-          const estimate = await self.DitaKnowledgeIndex.estimate({ ...options, onProgress: info => progress({ stage: 'estimate', ...info }) });
-          prepared.measure(estimate);
-          progress({ stage: 'vectors' });
-          generated = await self.DitaKnowledgeIndex.generate({ ...options, onProgress: info => progress({ stage: 'vectors', ...info }) });
+          generated = await self.DitaKnowledgeIndex.publish({ ...options, onEstimate: estimate => prepared.measure(estimate), onProgress: progress });
         }
         if (controller.signal.aborted) throw Object.assign(Error('已取消发布'), { name: 'AbortError' });
         const output = prepared.build(generated?.index);
