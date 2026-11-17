@@ -189,7 +189,11 @@
     const count = indexes.reduce((sum, index) => sum + (index?.chunks?.length || 0), 0);
     if (count > 12000) throw Error('语义索引超过 12000 个片段，请减少手册后重试');
     let recordsOffset = 0, offset = 0;
-    const chunks = [], bytes = indexes.length === 1 ? null : new Uint8Array(count * profile.dimensions * 4), view = bytes && new DataView(bytes.buffer);
+    // Legacy input may omit padding or contain whitespace accepted by atob.
+    // Normalize that case so capacity estimates still match canonical base64.
+    const single = indexes.length === 1 && typeof indexes[0].vectors === 'string' &&
+      indexes[0].vectors.length === 4 * Math.ceil(count * profile.dimensions * 4 / 3) && !/\s/.test(indexes[0].vectors);
+    const chunks = [], bytes = single ? null : new Uint8Array(count * profile.dimensions * 4), view = bytes && new DataView(bytes.buffer);
     for (const [i, records] of groups.entries()) {
       const index = indexes[i];
       if (index?.profile?.id !== profile.id) throw Error('合并包的分片配置不一致，请统一重建');

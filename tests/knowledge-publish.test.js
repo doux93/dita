@@ -151,6 +151,15 @@ test('publication rejects partial, out-of-order and duplicate streamed results',
   }
 });
 
+test('single-manual vector reuse normalizes legacy base64 before exact capacity accounting', async () => {
+  const records = [{ manualId: 'legacy', manualTitle: 'HTTP', anchor: 'a', title: 'HTTP', text: 'HTTP timeout' }];
+  const chunks = await data.chunksFor(records, text => text.length + 2), index = data.createIndex(chunks, chunks.map(vector));
+  for (const vectors of [index.vectors.replace(/=/g, ''), index.vectors.replace(/(.{100})/g, '$1\n')]) {
+    const normalized = data.combineIndexes([records], [{ ...index, vectors }]);
+    assert.deepEqual(normalized, index);
+  }
+});
+
 test('cancelling a live publication aborts server inference and never caches a partial result', { timeout: 10000 }, async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dita-publish-abort-')); t.after(() => fs.rm(directory, { recursive: true, force: true }));
   let started, stopped;
