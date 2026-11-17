@@ -51,6 +51,22 @@ test('real HTTP knowledge delivery works across repositories and from a moved of
     assert.equal(await frame.locator('#kbArticle .export-footnotes > ol > li').count(), 25);
     await page.click('#knowledgePreviewClose'); await page.click('#knowledgeClose');
   });
+  await stage('closing during filter loading cannot erase remembered publication conditions on a workspace change', async () => {
+    const initial = await page.evaluate(() => window.DitaApp.state.currentBranch), endpoint = '**/api/filters'; let release;
+    const hold = new Promise(resolve => { release = resolve; });
+    await context.route(endpoint, async route => { await hold; await route.continue().catch(() => {}); });
+    const pending = context.waitForEvent('request', request => request.url().endsWith('/api/filters'));
+    await page.click('#knowledgeButton'); await pending;
+    assert.equal(await page.locator('#knowledgePreview').isDisabled(), true);
+    assert.equal(await page.locator('#knowledgeDownload').isDisabled(), true);
+    await page.click('#knowledgeClose'); release(); await context.unroute(endpoint);
+    await page.selectOption('#branchSelect', 'alternate'); await page.waitForFunction(() => window.DitaApp.state.currentBranch === 'alternate');
+    await page.selectOption('#branchSelect', initial); await page.waitForFunction(initial => window.DitaApp.state.currentBranch === initial, initial);
+    await page.click('#knowledgeButton'); await page.locator('#knowledgeAdd:not([disabled])').waitFor();
+    assert.equal(await page.locator('#knowledgeFilter').inputValue(), 'filters/filter_tbd.ditaval');
+    assert.equal(await page.locator('#knowledgePrefixes').isChecked(), true);
+    await page.click('#knowledgeClose');
+  });
   await stage('oversized semantic delivery stops before inference and the captured HTTP manual remains usable', async () => {
     await page.click('#knowledgeButton'); await page.check('#knowledgeSemantic');
     const endpoint = '**/api/knowledge/publish', requests = [], downloads = [];

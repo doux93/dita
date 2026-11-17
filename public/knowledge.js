@@ -2,7 +2,7 @@
 (function (root) {
   function createController(A) {
     const get = id => document.getElementById(id), parts = new Map(), recipes = new Map(), preferences = new Map(), sourceStates = new Map(), capture = root.DitaKnowledgeCapture.createCapture(A);
-    let busy = false, publishing = false, generatingVectors = false, loading = false, filterFailed = false, operation = 0, abort, compiled = null, chosenModel = '', preferenceKey = '';
+    let busy = false, publishing = false, generatingVectors = false, loading = false, filtersReady = false, filterFailed = false, operation = 0, abort, compiled = null, chosenModel = '', preferenceKey = '';
     const publisher = root.DitaKnowledgePublisher.createPublisher();
     let lastManifest = null;
     const batchCapture = root.DitaKnowledgeBatch.createBatchCapture(A);
@@ -14,7 +14,7 @@
     const sameQuickSettings = (left, right) => ['filterPath', 'prefixes', 'version', 'mode', 'module'].every(field => left[field] === right[field]);
     function invalidate() { publisher.dispose(); compiled = null; lastManifest = null; get('knowledgeVectorStatus').textContent = ''; get('knowledgeCapacity').textContent = ''; }
     function remember() {
-      if (!preferenceKey || loading || filterFailed) return;
+      if (!preferenceKey || loading || !filtersReady || filterFailed) return;
       preferences.set(preferenceKey, { version: get('knowledgeVersion').value, filterPath: get('knowledgeFilter').value,
         prefixes: get('knowledgePrefixes').checked, mode: get('knowledgeMode').value, module: get('knowledgeModule').value,
         paths: [...get('knowledgeSources').querySelectorAll('input:checked')].map(input => input.value) });
@@ -53,7 +53,7 @@
       get('knowledgeBatchCheck').disabled = busy || loading || !recipes.size; get('knowledgeBatchRetry').disabled = busy || loading || ![...recipes.keys()].some(key => !parts.has(key)); get('knowledgeBatchCancel').hidden = !busy;
       get('knowledgeBatchCancel').textContent = generatingVectors ? '取消向量生成' : publishing ? '取消发布' : '取消核对';
       get('knowledgeModel').disabled = busy || recipes.size > 0;
-      const ready = !busy && recipes.size > 0 && readyParts().every(part => part && !part.staleMetadata.length);
+      const ready = !busy && !loading && recipes.size > 0 && readyParts().every(part => part && !part.staleMetadata.length);
       get('knowledgePreview').disabled = busy || !ready; get('knowledgeChunkPreview').disabled = busy || !ready; get('knowledgeDownload').disabled = busy || !ready; get('knowledgeClear').disabled = busy || !recipes.size;
       for (const input of get('knowledgeSources').querySelectorAll('input')) input.disabled = busy || loading;
       for (const button of get('knowledgeCollection').querySelectorAll('button')) button.disabled = busy;
@@ -130,13 +130,13 @@
       const recipe = local[0];
       const pref = preferences.get(preferenceKey) || (recipe ? { ...recipe, paths: local.filter(item => sameQuickSettings(item, recipe)).map(item => item.path) } : {});
       sourceChoices(pref); quickFields(pref);
-      get('knowledgeFilter').replaceChildren(new Option('正在加载条件文件…', '')); loading = true; filterFailed = false; controls();
+      get('knowledgeFilter').replaceChildren(new Option('正在加载条件文件…', '')); loading = true; filtersReady = false; filterFailed = false; controls();
       const current = () => generation === operation && workspace === A.api.token && get('knowledgeDialog').open;
       try {
         const filters = await A.manual.listFilters(); if (!current()) return;
         get('knowledgeFilter').replaceChildren(new Option('不过滤正文', ''));
         for (const path of filters.files) get('knowledgeFilter').add(new Option((filters.descriptions?.[path] || '条件文件') + ' · ' + path, path));
-        quickFilter(pref.filterPath); loading = false; controls();
+        quickFilter(pref.filterPath); loading = false; filtersReady = true; controls();
       } catch (cause) { if (current()) { get('knowledgeFilter').replaceChildren(); error('条件文件读取失败，暂不能加入手册：' + cause.message); loading = false; filterFailed = true; controls(); } }
     }
     async function show() {
